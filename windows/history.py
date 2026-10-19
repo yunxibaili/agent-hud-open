@@ -9,6 +9,7 @@ provider; it only observes the reports the HUD already has.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -18,8 +19,9 @@ BUCKET_MINUTES = 15
 BUCKET_COUNT = 96          # 24 hours
 MAX_EVENTS = 6000
 KEEP_SECONDS = 48 * 3600
-# AlertPolicy.resetRise: a drop larger than this is a reset, not noise.
+# AlertPolicy.resetRise: a drop of at least this is a reset, not noise.
 RESET_RISE = 5.0
+MAX_READING_AGE = 30 * 60
 # How long a token gain marks an agent as working.
 ACTIVE_SECONDS = 240
 
@@ -91,7 +93,7 @@ class History:
                 continue
             key = "%s|%s" % (report.pid, window.key)
             rows = self.windows.setdefault(key, [])
-            if rows and rows[-1][1] - window.used_percent > RESET_RISE:
+            if rows and rows[-1][1] - window.used_percent >= RESET_RISE:
                 resets.append(window.key)
             rows.append([now, float(window.used_percent)])
             # Keep the level samples short: the forecast only reads the last hours.
@@ -146,8 +148,14 @@ class History:
         now = now if now is not None else time.time()
         rows = self.windows.get("%s|%s" % (pid, window_key)) or []
         cutoff = now - hours * 3600
-        rows = [r for r in rows if r[0] >= cutoff]
-        if len(rows) < 3:
+        rows = sorted((r for r in rows if math.isfinite(r[0]) and math.isfinite(r[1])
+                       and cutoff <= r[0] <= now and 0 <= r[1] <= 100), key=lambda r: r[0])
+        # A restored window starts a new pace; never bridge across the last reset.
+        for index in range(len(rows) - 1, 0, -1):
+            if rows[index - 1][1] - rows[index][1] >= RESET_RISE:
+                rows = rows[index:]
+                break
+        if len(rows) < 3 or now - rows[-1][0] > MAX_READING_AGE:
             return None
         first, last = rows[0], rows[-1]
         span = (last[0] - first[0]) / 3600.0
@@ -161,6 +169,25 @@ class History:
         return {"pct_per_hour": rate,
                 "hours_to_empty": (remaining / rate) if rate > 0 else None,
                 "used": last[1]}
+
+    def forecast(self, report, window, now: float | None = None) -> dict | None:
+        """Estimate from current, observed quota data, without simulating further use."""
+        now = time.time() if now is None else now
+        used, reset = window.used_percent, window.reset_at
+        if (not report.ok or not 0 <= now - report.updated_at <= MAX_READING_AGE
+                or window.unlimited or used is None or not math.isfinite(used)
+                or not 0 <= used < 99.5 or reset is None or not math.isfinite(reset)
+                or reset <= now):
+            return None
+        hours = 3.0
+        if window.duration_minutes and window.duration_minutes > 0:
+            hours = min(hours, (now - (reset - window.duration_minutes * 60)) / 3600.0)
+        estimate = self.burn(report.pid, window.key, now=now, hours=hours)
+        if not estimate or not math.isfinite(estimate["pct_per_hour"]) or estimate["pct_per_hour"] < 0.1:
+            return None
+        remaining_hours = (100.0 - used) / estimate["pct_per_hour"]
+        return {"pct_per_hour": estimate["pct_per_hour"], "hours_to_empty": remaining_hours,
+                "used": used, "before_reset": remaining_hours * 3600 < reset - now}
 
     def already_seeded(self, pid: str, tag: str) -> bool:
         return (self.last.get(pid) or {}).get("seeded") == tag

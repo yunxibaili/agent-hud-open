@@ -1,7 +1,17 @@
 # Agent HUD · Windows 版（PySide6）
 
+<img src="assets/agent-hud-icon-v1.png" width="112" alt="Agent HUD 可爱助手图标">
+
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
+
+### Windows v0.1.5 · 2026-10-19
+
+- 应用与系统托盘启用新绘制的可爱图标，托盘右下角保留额度状态色点；继续仅驻留托盘，不占任务栏。
+- 新增提前耗尽预警：即使未达到临界用量，按已观察的速度预计撑不到重置时，也会通过现有提醒条提示；每个窗口在同一重置周期内最多提醒一次预测风险。
+- 卡片和预警共用预测计算。失败、超过 30 分钟、未来时间、不限量、已耗尽、没有未来重置时间或样本不足的数据不参与预测；首次观察保持静默。
+- 预测至少需要 3 次有效采样且跨度不少于 9 分钟；依据已知周期起点截取样本，并从最后一次明显重置后重新估计。估算不会主动模拟未观察到的消耗，不保证实际耗尽时间。
+- 复用现有 `History`、额度数据和提醒条，参照上游 [QuotaAlerts.swift](https://github.com/jazzenchen/agent-hud-open/blob/bf19ac98da11fe0f5967f5a124d42f0da4bf2cf9/Sources/AgentHUDCore/Logic/Alerts/QuotaAlerts.swift)、`QuotaMath.swift` 与 `UsageAnalytics.swift` 的规则，不增加依赖或额外采集请求。
 
 ### Windows v0.1.4 · 2026-10-19
 

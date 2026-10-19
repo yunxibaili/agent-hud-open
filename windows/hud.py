@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import math
 import os
 import queue
 import sys
@@ -61,7 +62,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -71,7 +72,6 @@ HOVER_SLOW_MS = 100
 FRAME_ACTIVE_MS = 16
 FRAME_IDLE_MS = 66
 REMINDER_SECONDS = 5.0
-CRITICAL_USED = 90.0
 HIDE_AFTER = 0.6
 
 GWL_EXSTYLE = -20
@@ -195,6 +195,7 @@ class HudWindow(QWidget):
         self.outside_since: float | None = None
         self.reminder_until = 0.0
         self.prev_used: dict[str, dict[str, float]] = {}
+        self.forecast_warned_until: dict[tuple[str, str], float] = {}
         self.was_active: dict[str, bool] = {}
         self.peek_sig = None
         self.panel_sig = None
@@ -488,11 +489,8 @@ class HudWindow(QWidget):
             if focused:
                 best = None
                 for window in report.windows:
-                    if window.used_percent is None or window.used_percent >= 99.5:
-                        continue
-                    estimate = self.history.burn(report.pid, window.key)
-                    if (not estimate or estimate.get("hours_to_empty") is None
-                            or estimate.get("pct_per_hour", 0) < 0.1):
+                    estimate = self.history.forecast(report, window)
+                    if not estimate or not estimate["before_reset"]:
                         continue
                     if best is None or estimate["hours_to_empty"] < best[0]:
                         best = (estimate["hours_to_empty"], estimate, window)
@@ -584,18 +582,42 @@ class HudWindow(QWidget):
 
     def _audit(self, reports) -> None:
         """Quota alerts, resets and finished sessions, one pill at a time."""
+        now = time.time()
         for report in reports:
-            if not report.ok:
+            if not report.ok or not 0 <= now - report.updated_at <= history_module.MAX_READING_AGE:
                 continue
             for window in report.windows:
-                if window.used_percent is None:
+                seen = self.prev_used.setdefault(report.pid, {})
+                if (window.used_percent is None or not math.isfinite(window.used_percent)
+                        or not 0 <= window.used_percent <= 100 or window.unlimited):
+                    seen.pop(window.key, None)
                     continue
-                before = (self.prev_used.get(report.pid) or {}).get(window.key)
-                self.prev_used.setdefault(report.pid, {})[window.key] = window.used_percent
-                if before is not None and before < CRITICAL_USED <= window.used_percent:
+                if window.reset_at is not None and (not math.isfinite(window.reset_at) or window.reset_at <= now):
+                    continue
+                before = seen.get(window.key)
+                seen[window.key] = window.used_percent
+                key = (report.pid, window.key)
+                if (before is not None and window.used_percent <= 0.5
+                        and before - window.used_percent >= history_module.RESET_RISE):
+                    self.forecast_warned_until.pop(key, None)
+                forecast = self.history.forecast(report, window, now=now)
+                at_risk = forecast is not None and forecast["before_reset"]
+                if before is None:
+                    # Existing risk at startup is a quiet baseline, not a new event.
+                    if at_risk:
+                        self.forecast_warned_until[key] = window.reset_at
+                    continue
+                if before < self.crit <= window.used_percent:
                     self._show_reminder(reminder_segments(
                         report.name, "%s 额度接近用尽" % window.short, "critical",
                         "已用 %.0f%%" % window.used_percent))
+                    return
+                if at_risk and now >= self.forecast_warned_until.get(key, 0):
+                    self.forecast_warned_until[key] = window.reset_at
+                    self._show_reminder(reminder_segments(
+                        report.name, "%s 预计撑不到重置" % window.short, "warning",
+                        "约 %s 耗尽 · %s 后重置" % (T.hours_text(forecast["hours_to_empty"]),
+                                                   T.countdown(window.reset_at, now))))
                     return
             active = self.history.is_active(report.pid)
             if self.was_active.get(report.pid) and not active and report.today_tokens:
@@ -788,6 +810,24 @@ class HudWindow(QWidget):
 
     # -- tray & menu --------------------------------------------------------
     def _tray_icon(self, level: str) -> QIcon:
+        artwork = self.windowIcon()
+        if not artwork.isNull():
+            icon = QIcon()
+            for size in (16, 20, 24, 32, 48, 64):
+                pixmap = artwork.pixmap(size, size)
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                pen = painter.pen()
+                pen.setWidthF(max(1.0, size / 16))
+                pen.setColor(QColor(20, 20, 24))
+                painter.setPen(pen)
+                painter.setBrush(T.color_for(level))
+                diameter = max(4, round(size * 0.3))
+                painter.drawEllipse(QRect(size - diameter - 1, size - diameter - 1,
+                                          diameter, diameter))
+                painter.end()
+                icon.addPixmap(pixmap)
+            return icon
         size = 32
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
@@ -990,6 +1030,7 @@ def main(argv=None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Agent HUD")
     app.setApplicationVersion(VERSION)
+    app.setWindowIcon(QIcon(str(HERE / "assets" / "agent-hud-icon-v1.png")))
     app.setQuitOnLastWindowClosed(False)
     motion.detect_reduced()
 
