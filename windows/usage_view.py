@@ -142,6 +142,10 @@ class UsageWindow(QWidget):
 
     def refresh(self, *_args):
         self.snapshot = tokens.cached()
+        if self.snapshot is None:
+            self.total.setText("正在读取本地记录…")
+            self.note.setText("首次扫描在后台进行，完成后自动显示；尚未采集的用量不记作零。")
+            return
         readings = self.snapshot or {}
         key, chosen = self.period.currentData(), self.agent.currentData()
         names = set()

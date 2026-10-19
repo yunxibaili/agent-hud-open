@@ -63,7 +63,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.8"
+VERSION = "0.1.9"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -669,6 +669,7 @@ class HudWindow(QWidget):
         readings = tokens.cached()
         if readings is not self.readings:
             self.readings = readings
+            self._refresh_month()
             changed = True
         while True:
             try:

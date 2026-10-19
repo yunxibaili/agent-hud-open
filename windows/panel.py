@@ -12,6 +12,7 @@ import time
 import model
 import money
 import motion
+import providers
 import ui_theme as T
 from PySide6.QtCore import QRectF, QSize, Qt, QRect
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
@@ -777,7 +778,7 @@ class MonthCard(QWidget):
         painter.setPen(QColor(T.TEXT))
         painter.drawText(QRect(16, 34, self.width() - 32, 30),
                          int(Qt.AlignLeft | Qt.AlignVCenter),
-                         model.human_tokens(total))
+                         model.human_tokens(total) if self.totals.get("ready", bool(self.totals)) else "统计中…")
 
         money_text = ("≈ $%.2f" % usd) if isinstance(usd, (int, float)) else "无本地计价"
         painter.setFont(T.numeric(15.0, QFont.Bold))
@@ -795,9 +796,7 @@ class MonthCard(QWidget):
             painter.setPen(QColor(T.TEXT))
             painter.drawText(QRect(28, y, 150, 18),
                              int(Qt.AlignLeft | Qt.AlignVCenter),
-                             {"codex": "Codex", "opencode": "OpenCode",
-                              "workbuddy": "WorkBuddy", "dsh": "DeepSeek Harness",
-                              "antigravity": "Antigravity"}.get(pid, pid))
+                             providers.META.get(pid, (pid, ""))[0])
             bar = QRectF(self.width() - 210, y + 7, 150, 4)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(255, 255, 255, 26))
@@ -813,6 +812,12 @@ class MonthCard(QWidget):
                              int(Qt.AlignRight | Qt.AlignVCenter),
                              "%.1fM" % (tokens / 1e6))
             y += 22
+        painter.setFont(T.ui(8.5))
+        painter.setPen(QColor(T.TEXT_FAINT))
+        caption = ("部分来源读取不完整；费用仅含已记录部分" if self.totals.get("incomplete")
+                   else "仅客户端留存的本月记录；费用仅含已记录部分")
+        painter.drawText(QRect(16, y + 5, self.width() - 32, 28),
+                         int(Qt.AlignLeft | Qt.AlignVCenter), caption)
 
 
 class Panel(QWidget):

@@ -60,6 +60,9 @@ class TokenReading:
     events: int = 0
     ranges: dict = field(default_factory=dict)
     notice: str = ""
+    month_tokens: int = 0
+    month_cost_usd: float | None = None
+    month_since: str = ""
 
     @property
     def window_total(self) -> int:
@@ -101,6 +104,8 @@ def _bucketize(events, now: float, currency: str | None = None,
                             "buckets": [0] * count}
                       for key, (_seconds, count) in RANGES.items()}
     midnight = _start_of_today(now)
+    month_start = _start_of_month(now)
+    reading.month_since = datetime.datetime.fromtimestamp(month_start).date().isoformat()
     cost = 0.0
     cost_known = False
     for event in events:
@@ -114,6 +119,10 @@ def _bucketize(events, now: float, currency: str | None = None,
         if (not isinstance(event_cost, (int, float)) or not math.isfinite(event_cost)
                 or event_cost < 0):
             event_cost = None
+        if stamp >= month_start:
+            reading.month_tokens += int(tokens)
+            if currency == "USD" and event_cost is not None:
+                reading.month_cost_usd = (reading.month_cost_usd or 0.0) + event_cost
         moment = datetime.datetime.fromtimestamp(stamp) if age < 30 * 86400 else None
         for key, (seconds, count) in RANGES.items():
             if age >= seconds:
@@ -707,32 +716,29 @@ def refresh_month(now: float | None = None) -> dict | None:
 
 
 def month_totals(now: float | None = None) -> dict:
-    """Every harness's usage for the calendar month, in tokens and dollars.
-
-    Tokens come from each source's own records - the Harness session logs for
-    the three routed agents, the rollout files for Codex - and the money comes
-    from the whale ledger, the only one of them that records a cost.
-    """
+    """Calendar totals from the same scanner snapshot as the statistics view."""
     import money
 
     now = now if now is not None else time.time()
     start = _start_of_month(now)
-    by_agent: dict[str, int] = {}
-    try:
-        split = harness_by_route(now)
-    except Exception:
-        split = {}
-    for pid, events in (split or {}).items():
-        by_agent[pid] = sum(int(tokens) for stamp, tokens in events
-                            if stamp >= start)
-    by_agent["codex"] = codex_month(now)
-    cost, currency, _ledger = whale_month()
+    since = datetime.datetime.fromtimestamp(start).date().isoformat()
+    readings = cached() or {}
+    current = {pid: reading for pid, reading in readings.items() if reading.month_since == since}
+    by_agent = {pid: reading.month_tokens for pid, reading in current.items() if reading.month_tokens}
+    costs = [reading.month_cost_usd for reading in current.values() if reading.month_cost_usd is not None]
+    if current:
+        cost, currency, _ledger = whale_month()
+        host_cost = money.to_usd(cost, currency) if cost is not None else None
+        if host_cost is not None:
+            costs.append(host_cost)
     return {
-        "since": datetime.datetime.fromtimestamp(start).date().isoformat(),
+        "since": since,
         "days": datetime.datetime.fromtimestamp(now).day,
         "tokens": sum(by_agent.values()),
         "by_agent": by_agent,
-        "cost_usd": money.to_usd(cost, currency) if cost is not None else None,
+        "cost_usd": sum(costs) if costs else None,
+        "ready": bool(current),
+        "incomplete": any(reading.notice for reading in readings.values()),
     }
 
 
@@ -797,6 +803,7 @@ def collect(now: float | None = None, force: bool = False) -> dict[str, TokenRea
             readings[pid] = source(now)
         except Exception:
             readings[pid] = _blank(pid)
+            readings[pid].notice = "来源读取失败，当前统计不可用"
     with _lock:
         _cache["data"] = readings
         _cache["at"] = time.time()
