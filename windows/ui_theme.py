@@ -58,6 +58,10 @@ AGENT_COLORS = {
     "qwen": QColor("#8B7AF4"),
     "openclaw": QColor("#FF6B6B"),
     "devin": QColor("#84C2F4"),
+    "hermes": QColor("#DDB56E"),
+    "zcode": QColor("#9BC675"),
+    "copilot": QColor("#A4B5DB"),
+    "grok": QColor("#D2D5DE"),
 }
 
 
@@ -163,6 +167,10 @@ ARTWORK = {
     "kimi": ("kimi", None),
     "qwen": ("qwen", None),
     "openclaw": ("openclaw", None),
+    "hermes": ("hermes", None),
+    "zcode": ("zcode", None),
+    "copilot": ("copilot", None),
+    "grok": ("grok", None),
 }
 
 # Vendors whose mark is a different size inside its own canvas.

@@ -36,6 +36,7 @@ WINDOW_SECONDS = BUCKET_COUNT * BUCKET_MINUTES * 60
 CACHE_SECONDS = 90.0
 RANGES = {"5h": (5 * 3600, 20), "24h": (24 * 3600, 96),
           "7d": (7 * 86400, 168), "30d": (30 * 86400, 120)}
+TOKEN_KINDS = {"input": "输入（非缓存）", "output": "输出", "cache_read": "缓存读取", "cache_write": "缓存写入"}
 
 #: Which Harness provider routes belong to which card. A turn is attributed to
 #: the route it used, so no two cards count the same request: the WorkBuddy
@@ -96,11 +97,12 @@ def _bucketize(events, now: float, currency: str | None = None,
     """Fold (timestamp, tokens, cost) triples into the 15-minute buckets."""
     reading = TokenReading(pid=pid, source=source)
     reading.events = len(events)
-    reading.ranges = {key: {"tokens": 0, "cost_usd": None, "priced_tokens": 0,
+    reading.ranges = {key: {"tokens": 0, "cost_usd": None, "priced_tokens": 0, "models": {},
                             "buckets": [0] * count}
                       for key, (_seconds, count) in RANGES.items()}
     midnight = _start_of_today(now)
     cost = 0.0
+    cost_known = False
     for event in events:
         stamp, tokens = event[0], event[1]
         if not math.isfinite(stamp) or not math.isfinite(tokens) or tokens < 0:
@@ -108,26 +110,55 @@ def _bucketize(events, now: float, currency: str | None = None,
         age = now - stamp
         if age < 0:
             continue
+        event_cost = event[2] if len(event) > 2 else None
+        if (not isinstance(event_cost, (int, float)) or not math.isfinite(event_cost)
+                or event_cost < 0):
+            event_cost = None
+        moment = datetime.datetime.fromtimestamp(stamp) if age < 30 * 86400 else None
         for key, (seconds, count) in RANGES.items():
             if age >= seconds:
                 continue
             entry = reading.ranges[key]
             entry["tokens"] += int(tokens)
-            entry["buckets"][count - 1 - int(age // (seconds / count))] += int(tokens)
-            if (currency == "USD" and len(event) > 2 and event[2] is not None
-                    and math.isfinite(event[2]) and event[2] >= 0):
-                entry["cost_usd"] = (entry["cost_usd"] or 0.0) + event[2]
+            index = count - 1 - int(age // (seconds / count))
+            entry["buckets"][index] += int(tokens)
+            name = event[3] if len(event) > 3 and isinstance(event[3], str) else "Unknown"
+            parts = event[4] if len(event) > 4 and isinstance(event[4], dict) else {}
+            valid_parts = (set(parts) == set(TOKEN_KINDS)
+                           and all(isinstance(value, int) and value >= 0 for value in parts.values())
+                           and sum(parts.values()) == tokens)
+            if name not in entry["models"]:
+                entry["models"][name] = {
+                    "tokens": 0, "buckets": [0] * count, "cost_usd": None, "priced_tokens": 0,
+                    "parts": {kind: 0 for kind in TOKEN_KINDS}, "known_tokens": 0,
+                    "part_buckets": {kind: [0] * count for kind in TOKEN_KINDS},
+                    "activity": [[0] * 24 for _ in range(7)],
+                    "part_activity": {kind: [[0] * 24 for _ in range(7)] for kind in TOKEN_KINDS}}
+            grouped = entry["models"][name]
+            grouped["tokens"] += int(tokens)
+            grouped["buckets"][index] += int(tokens)
+            grouped["activity"][moment.weekday()][moment.hour] += int(tokens)
+            if valid_parts:
+                grouped["known_tokens"] += int(tokens)
+                for kind in TOKEN_KINDS:
+                    grouped["parts"][kind] += parts[kind]
+                    grouped["part_buckets"][kind][index] += parts[kind]
+                    grouped["part_activity"][kind][moment.weekday()][moment.hour] += parts[kind]
+            if currency == "USD" and event_cost is not None:
+                entry["cost_usd"] = (entry["cost_usd"] or 0.0) + event_cost
                 entry["priced_tokens"] += int(tokens)
+                grouped["cost_usd"] = (grouped["cost_usd"] or 0.0) + event_cost
+                grouped["priced_tokens"] += int(tokens)
         if tokens:
             index = int(age // (BUCKET_MINUTES * 60))
             if 0 <= index < BUCKET_COUNT:
                 reading.buckets[BUCKET_COUNT - 1 - index] += int(tokens)
             if stamp >= midnight:
                 reading.today += int(tokens)
-        if len(event) > 2 and event[2]:
-            if stamp >= midnight:
-                cost += float(event[2])
-    if cost:
+        if event_cost is not None and stamp >= midnight:
+            cost += float(event_cost)
+            cost_known = True
+    if cost_known:
         reading.today_cost = cost
         reading.cost_currency = currency
     return reading
@@ -143,9 +174,10 @@ def _codex_rollout_parser(path: str, cutoff: float | None = None) -> list:
     previous = None
     started = None
     inherited_ordinal = None
+    model_name = "Unknown"
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if '"token_count"' not in line and '"session_meta"' not in line:
+            if not any(kind in line for kind in ('"token_count"', '"session_meta"', '"turn_context"')):
                 continue
             try:
                 record = json.loads(line)
@@ -155,6 +187,9 @@ def _codex_rollout_parser(path: str, cutoff: float | None = None) -> list:
                 continue
             payload = record.get("payload") or {}
             if not isinstance(payload, dict):
+                continue
+            if record.get("type") == "turn_context":
+                model_name = payload.get("model") or model_name
                 continue
             if record.get("type") == "session_meta":
                 if started is None and payload.get("id"):
@@ -176,20 +211,22 @@ def _codex_rollout_parser(path: str, cutoff: float | None = None) -> list:
             totals = info.get("total_token_usage") or {}
             if not isinstance(totals, dict):
                 continue
-            counts = [totals.get(key) for key in ("input_tokens", "output_tokens")]
+            keys = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens")
+            counts = [totals.get(key, 0) for key in keys]
             if any(not isinstance(v, int) or v < 0 for v in counts) or not stamp:
                 continue
-            if previous is not None and all(value >= old for value, old in zip(counts, previous)):
-                tokens = sum(value - old for value, old in zip(counts, previous))
+            if previous is not None and all(value >= old for value, old in zip(counts[:3], previous[:3])):
+                values = [value - old for value, old in zip(counts, previous)]
+                values[3] = max(0, values[3])
             else:
                 last = info.get("last_token_usage") or {}
                 if not isinstance(last, dict):
                     continue
-                values = [last.get(key, counts[index]) for index, key in enumerate(("input_tokens", "output_tokens"))]
+                values = [last.get(key, counts[index]) for index, key in enumerate(keys)]
                 if any(not isinstance(value, int) or value < 0 for value in values):
                     previous = counts
                     continue
-                tokens = sum(values)
+            tokens = sum(values[:2])
             previous = counts
             try:
                 moment = datetime.datetime.fromisoformat(
@@ -202,8 +239,12 @@ def _codex_rollout_parser(path: str, cutoff: float | None = None) -> list:
                 continue
             if not isinstance(tokens, (int, float)) or not math.isfinite(tokens) or tokens <= 0:
                 continue
+            prompt, output, read, write = values
+            if read + write > prompt:
+                continue
+            parts = {"input": prompt - read - write, "output": output, "cache_read": read, "cache_write": write}
             if cutoff is None or moment >= cutoff:
-                out.append((moment, int(tokens)))
+                out.append((moment, int(tokens), None, model_name, parts))
     return out
 
 def _codex_rollout_files(home, cutoff: float | None = None) -> list[str]:
@@ -265,6 +306,20 @@ def _opencode_message_tokens(data: dict) -> tuple[int, float | None]:
     return total, float(cost) if isinstance(cost, (int, float)) else None
 
 
+def _opencode_event(stamp, data):
+    total, cost = _opencode_message_tokens(data)
+    usage = data.get("tokens") or {}
+    cache = usage.get("cache") if isinstance(usage.get("cache"), dict) else {}
+    def number(value):
+        return int(value or 0)
+    parts = {"input": number(usage.get("input")),
+             "output": number(usage.get("output")) + number(usage.get("reasoning")),
+             "cache_read": number(cache.get("read")), "cache_write": number(cache.get("write"))}
+    named = data.get("model")
+    name = data.get("modelID") or (named.get("id") if isinstance(named, dict) else named) or "Unknown"
+    return (stamp, total, cost, name, parts)
+
+
 def _opencode(now: float, extra_events=None) -> TokenReading:
     if extra_events is None:
         extra_events = [(ts, tok) for ts, tok in harness_by_route(now)["opencode"]]
@@ -295,7 +350,7 @@ def _opencode(now: float, extra_events=None) -> TokenReading:
                         continue
                     tokens, cost = _opencode_message_tokens(data)
                     if tokens:
-                        events.append((created / 1000.0, tokens, cost))
+                        events.append(_opencode_event(created / 1000.0, data))
                 source = "opencode.db"
             except Exception:
                 pass
@@ -317,7 +372,7 @@ def _opencode(now: float, extra_events=None) -> TokenReading:
                 created = (data.get("time") or {}).get("created")
                 tokens, cost = _opencode_message_tokens(data)
                 if tokens and isinstance(created, (int, float)):
-                    events.append((created / 1000.0, tokens, cost))
+                    events.append(_opencode_event(created / 1000.0, data))
             if events:
                 source = "storage/message"
                 break
@@ -595,7 +650,7 @@ def codex_month(now: float | None = None) -> int:
         return 0
     for file in _codex_rollout_files(home, start):
         rows = cached_rows(file, _codex_rollout_parser)
-        total += sum(int(tokens) for stamp, tokens in rows if start <= stamp <= now)
+        total += sum(int(event[1]) for event in rows if start <= event[0] <= now)
     return total
 
 
@@ -733,7 +788,7 @@ def collect(now: float | None = None, force: bool = False) -> dict[str, TokenRea
     import providers
     for pid in providers.ORDER:
         source = _SOURCES.get(pid)
-        if pid in local_usage.LOCAL_PROVIDERS:
+        if pid in local_usage.USAGE_PROVIDERS:
             source = lambda stamp, current=pid: local_usage.collect(current, stamp)
         if source is None:
             readings[pid] = _blank(pid)          # no local ledger for this one

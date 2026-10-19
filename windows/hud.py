@@ -55,6 +55,7 @@ import winx  # noqa: E402
 from dock import DockBar, HEIGHT as DOCK_HEIGHT, MONTH_PID  # noqa: E402
 from panel import Panel  # noqa: E402
 from peek import LinePill, peek_segments, reminder_segments  # noqa: E402
+from usage_view import UsageWindow  # noqa: E402
 
 from PySide6.QtCore import QLockFile, QPoint, QRect, QSize, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # noqa: E402
@@ -62,7 +63,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -923,7 +924,6 @@ class HudWindow(QWidget):
 
     def _open_statistics(self) -> None:
         if self.statistics_window is None:
-            from usage_view import UsageWindow
             self.statistics_window = UsageWindow()
         self.statistics_window.show()
         self.statistics_window.raise_()

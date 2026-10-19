@@ -10,6 +10,7 @@ import math
 import time
 
 import model
+import tokens
 from winx import userprofile
 
 
@@ -56,6 +57,8 @@ def fetch(cfg):
     directory = userprofile() / ".cache" / "devin" / "cli"
     report = model.ProviderReport(pid="devin", name="Devin CLI", mark="DV",
                                   available=directory.exists(), installed=directory.exists())
+    reading = (tokens.cached() or {}).get("devin")
+    report.today_tokens = reading.today if reading else None
     candidates = []
     for path in directory.glob("user_status.*.bin"):
         try:
@@ -63,8 +66,11 @@ def fetch(cfg):
         except OSError:
             continue
     if not candidates:
-        report.available = False
-        report.note = "尚未发现 Devin CLI 额度缓存"
+        report.available = (userprofile() / ".local/share/devin/cli/sessions.db").exists()
+        report.installed = report.available
+        report.ok = report.available
+        report.updated_at = time.time()
+        report.note = "仅本地会话用量；尚未发现 Devin CLI 额度缓存"
         return report
     for modified, path in sorted(candidates, reverse=True):
         try:

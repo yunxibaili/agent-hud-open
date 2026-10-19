@@ -8,15 +8,20 @@ names leave the readers; no prompts, identities or credentials are retained.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import math
 import os
+import sqlite3
+import time
+from contextlib import closing
 from pathlib import Path
 
 import tokens
 from winx import userprofile
 
-LOCAL_PROVIDERS = {"claude", "codebuddy", "pi", "kimi", "qwen", "openclaw"}
+LOCAL_PROVIDERS = {"claude", "codebuddy", "pi", "kimi", "qwen", "openclaw", "hermes", "zcode", "copilot", "grok"}
+USAGE_PROVIDERS = LOCAL_PROVIDERS | {"devin"}
 
 
 def _home(variable, default):
@@ -46,6 +51,18 @@ def layouts(pid):
         roots = [_home("OPENCLAW_STATE_DIR", str(base))]
         roots += [p for p in home.glob(".openclaw-*") if p.is_dir()]
         return [(root / "agents", "*/sessions/*.jsonl*") for root in roots]
+    if pid == "hermes":
+        root = _home("HERMES_HOME", ".hermes")
+        return [(root, "state.db"), (root / "profiles", "*/state.db")]
+    if pid == "zcode":
+        return [(home / ".zcode" / "cli" / "db", "db.sqlite")]
+    if pid == "devin":
+        return [(home / ".local" / "share" / "devin" / "cli", "sessions.db")]
+    if pid == "copilot":
+        return [(_home("COPILOT_HOME", ".copilot") / "session-state", "*/events.jsonl")]
+    if pid == "grok":
+        root = _home("GROK_HOME", ".grok")
+        return [(root / "sessions", "**/updates.jsonl"), (root / "logs", "**/unified.jsonl")]
     return []
 
 
@@ -199,8 +216,196 @@ def _kimi(path):
     return list(events.values())
 
 
+def _database(path):
+    con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+    con.execute("PRAGMA query_only=1")
+    deadline = time.monotonic() + 2.4
+    con.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+    return con
+
+
+def _columns(con, table):
+    # The table name is always a literal owned by a reader, never database content.
+    return {row[1] for row in con.execute("PRAGMA table_info(%s)" % table)}
+
+
+def _hermes(path):
+    events = []
+    with closing(_database(path)) as con:
+        session, usage = _columns(con, "sessions"), _columns(con, "session_model_usage")
+        if not {"id", "started_at"} <= session:
+            raise ValueError("Unsupported Hermes schema")
+        def column(alias, columns, name, fallback="NULL"):
+            return "%s.%s" % (alias, name) if name in columns else fallback
+        counts = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+        joined = {"session_id", "model"} <= usage
+        model = "COALESCE(u.model, %s)" % column("s", session, "model", "'Unknown'") if joined else column("s", session, "model", "'Unknown'")
+        at = "COALESCE(u.first_seen, s.started_at)" if joined and "first_seen" in usage else "s.started_at"
+        fields = ["s.id", model, at]
+        for name in counts:
+            fallback = column("s", session, name, "0")
+            fields.append("CASE WHEN u.session_id IS NULL THEN %s ELSE %s END" %
+                          (fallback, column("u", usage, name, "0")) if joined else fallback)
+        activity = "MAX(s.started_at, COALESCE(%s, 0), COALESCE(%s, 0))" % (
+            column("s", session, "ended_at"), column("s", session, "last_activity_at"))
+        if joined and "last_seen" in usage:
+            activity = "MAX(%s, COALESCE(u.last_seen, 0))" % activity
+        sql = "SELECT %s FROM sessions s %s WHERE %s >= ? LIMIT 100001" % (
+            ", ".join(fields), "LEFT JOIN session_model_usage u ON u.session_id=s.id" if joined else "", activity)
+        for index, row in enumerate(con.execute(sql, (time.time() - 32 * 86400,))):
+            if index == 100000:
+                raise ValueError("Hermes row limit reached")
+            parts = dict(zip(("input", "output", "cache_read", "cache_write"), map(counter, row[3:7])))
+            item = _event(row[2], parts, row[1], "%s:%s:%d" % (path, row[0], index))
+            if item:
+                events.append(item)
+    return events
+
+
+def _zcode(path):
+    events = []
+    with closing(_database(path)) as con:
+        columns = _columns(con, "model_usage")
+        computed = "computed_total_tokens" in columns
+        sql = ("SELECT id, model_id, COALESCE(completed_at, started_at), input_tokens, output_tokens, "
+               "reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, %s "
+               "FROM model_usage WHERE COALESCE(completed_at, started_at) >= ? "
+               "ORDER BY COALESCE(completed_at, started_at) DESC LIMIT 100001") % ("computed_total_tokens" if computed else "NULL")
+        for index, row in enumerate(con.execute(sql, ((time.time() - 32 * 86400) * 1000,))):
+            if index == 100000:
+                raise ValueError("ZCode row limit reached")
+            prompt, output, reasoning, read, write = map(counter, row[3:8])
+            inclusive = not computed or row[8] == prompt + output
+            if inclusive and read + write > prompt:
+                raise ValueError("Cache exceeds input")
+            parts = {"input": prompt - read - write if inclusive else prompt,
+                     "output": output if inclusive else output + reasoning,
+                     "cache_read": read, "cache_write": write}
+            item = _event(row[2], parts, row[1], row[0])
+            if item:
+                events.append(item)
+    return events
+
+
+def _devin(path):
+    events = {}
+    with closing(_database(path)) as con:
+        sql = ("SELECT row_id, session_id, created_at, "
+               "CASE WHEN json_valid(chat_message) THEN json_extract(chat_message, "
+               "'$.message_id', '$.metadata.request_id', '$.metadata.generation_model', "
+               "'$.metadata.created_at', '$.metadata.metrics') END "
+               "FROM message_nodes WHERE created_at >= ? ORDER BY row_id DESC LIMIT 100001")
+        for index, row in enumerate(con.execute(sql, (time.time() - 32 * 86400,))):
+            if index == 100000:
+                raise ValueError("Devin row limit reached")
+            fields = json.loads(row[3]) if row[3] else None
+            if not isinstance(fields, list) or len(fields) != 5 or not isinstance(fields[4], dict):
+                continue
+            usage = fields[4]
+            if usage.get("input_tokens") is None and usage.get("total_prompt_tokens") is not None:
+                prompt, read = counter(usage.get("total_prompt_tokens")), counter(usage.get("total_cached_tokens"))
+                if read > prompt:
+                    raise ValueError("Cache exceeds input")
+                parts = {"input": prompt - read, "output": counter(usage.get("total_completion_tokens")),
+                         "cache_read": read, "cache_write": 0}
+            else:
+                parts = {key: counter(usage.get(field)) for key, field in
+                         (("input", "input_tokens"), ("output", "output_tokens"),
+                          ("cache_read", "cache_read_tokens"), ("cache_write", "cache_creation_tokens"))}
+            item = _event(fields[3] or row[2], parts, fields[2], (row[1], fields[1] or fields[0] or row[0]))
+            if item:
+                events.setdefault(item[5], item)
+    return list(events.values())
+
+
+def _copilot(path):
+    events, peaks, seen, started = [], {}, set(), False
+    for ordinal, row in _records(path):
+        if row.get("type") == "session.start":
+            started = True
+        if row.get("type") != "session.shutdown":
+            continue
+        data = row.get("data") or {}
+        for name, metric in (data.get("modelMetrics") or {}).items():
+            identity = (row.get("id") or ordinal, name)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            usage = metric.get("usage") or {}
+            counts = [counter(usage.get(key)) for key in ("inputTokens", "outputTokens", "cacheReadTokens")]
+            before = peaks.get(name, [0, 0, 0] if started else None)
+            peaks[name] = [max(a, b) for a, b in zip(peaks.get(name, counts), counts)]
+            if before is None:
+                continue
+            prompt, output, read = [max(0, a - b) for a, b in zip(counts, before)]
+            read = min(prompt, read)
+            parts = {"input": prompt - read, "output": output, "cache_read": read, "cache_write": 0}
+            item = _event(row.get("timestamp"), parts, data.get("currentModel") if name == "auto" else name,
+                          (Path(path).parent.name, identity))
+            if item:
+                events.append(item)
+    return events
+
+
+def _grok(path):
+    events, models, generations = {}, {}, {}
+    unified = Path(path).name == "unified.jsonl"
+    name = "Unknown"
+    for ordinal, row in _records(path):
+        if unified:
+            pid = row.get("pid")
+            message = row.get("msg")
+            if message == "AuthManager::new":
+                generations[pid] = generations.get(pid, 0) + 1
+                continue
+            session = row.get("sid")
+            if not session:
+                continue
+            scope = (session, pid, generations.get(pid, 0))
+            usage = row.get("ctx") or {}
+            field = {"model changed": "model", "model catalog: notifying clients": "current_model_id",
+                     "backend_search: model switch": "new_model"}.get(message)
+            if field:
+                models[scope] = usage.get(field) or "Unknown"
+                continue
+            if message != "shell.turn.inference_done":
+                continue
+            prompt, output, read = (counter(usage.get(key)) for key in
+                                    ("prompt_tokens", "completion_tokens", "cached_prompt_tokens"))
+            stamp, name = row.get("ts"), models.get(scope, "Unknown")
+            identity = row.get("event_id") or row.get("eventId") or usage.get("event_id")
+            if not identity:
+                identity = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+        else:
+            if row.get("method") not in ("session/update", "_x.ai/session/update"):
+                continue
+            params = row.get("params") or {}
+            session, meta = params.get("sessionId"), params.get("_meta") or {}
+            update = params.get("update") or {}
+            name = (update.get("_meta") or {}).get("modelId") or meta.get("modelId") or name
+            if update.get("sessionUpdate") != "turn_completed":
+                continue
+            usage = update.get("usage") or {}
+            if usage.get("inputTokens") is None or usage.get("outputTokens") is None:
+                continue  # Context-size-only records cannot describe actual use.
+            prompt, output = counter(usage.get("inputTokens")), counter(usage.get("outputTokens"))
+            read = counter(usage.get("cachedReadTokens", usage.get("cacheReadTokens")))
+            used_models = usage.get("modelUsage") or {}
+            if len(used_models) == 1:
+                name = next(iter(used_models))
+            stamp, identity = meta.get("agentTimestampMs"), meta.get("eventId") or "%s:%d" % (path, ordinal)
+        if not session or read > prompt:
+            raise ValueError("Invalid Grok usage")
+        parts = {"input": prompt - read, "output": output, "cache_read": read, "cache_write": 0}
+        item = _event(stamp, parts, name, (session, identity))
+        if item:
+            events[item[5]] = item + (session,)
+    return list(events.values())
+
+
 READERS = {"claude": _claude, "codebuddy": _claude, "pi": _pi,
-           "openclaw": lambda path: _pi(path, openclaw=True), "kimi": _kimi, "qwen": _qwen}
+           "openclaw": lambda path: _pi(path, openclaw=True), "kimi": _kimi, "qwen": _qwen,
+           "hermes": _hermes, "zcode": _zcode, "devin": _devin, "copilot": _copilot, "grok": _grok}
 
 
 def collect(pid, now):
@@ -215,16 +420,21 @@ def collect(pid, now):
         except OSError:
             errors += 1
     # A moved project can retain a second copy of the same transcript.
-    for _modified, path in sorted(candidates, reverse=True):
+    ordered = sorted(candidates, reverse=True)
+    if pid == "grok":
+        ordered.sort(key=lambda row: row[1].name != "unified.jsonl")
+    inferred = set()
+    for _modified, path in ordered:
         if "tool-results" in path.parts or path.name.endswith((".zst", ".tmp", ".ledger.jsonl")):
             continue
         if pid == "qwen" and "subagents" in path.parts:
             continue
         try:
             stat = path.stat()
-            if stat.st_mtime < now - 32 * 86400:
+            database = path.suffix in (".db", ".sqlite")
+            if not database and stat.st_mtime < now - 32 * 86400:
                 continue
-            if stat.st_size > 64 * 1024 * 1024:
+            if not database and stat.st_size > 64 * 1024 * 1024:
                 errors += 1
                 continue
             if pid in ("claude", "codebuddy"):
@@ -232,10 +442,19 @@ def collect(pid, now):
                     continue
                 seen.add(path.name)
             for event in tokens.cached_rows(str(path), READERS[pid]):
+                if pid == "grok":
+                    if path.name == "unified.jsonl":
+                        inferred.add(event[6])
+                    elif event[6] in inferred:
+                        continue
                 events.setdefault(event[5], event)
-        except (OSError, ValueError, TypeError, AttributeError):
+        except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
             errors += 1
     reading = tokens._bucketize(list(events.values()), now, "USD", "本地会话记录", pid)
     if errors:
-        reading.notice = "部分日志损坏、不可读或超过 64 MiB，统计不完整"
+        reading.notice = "部分来源不可读、格式不支持或超过读取上限，统计不完整"
+    if pid == "copilot" and files:
+        reading.notice = (reading.notice + " · " if reading.notice else "") + "仅关闭快照，尚未读取运行中 OTel 用量"
+    if pid == "grok" and files:
+        reading.notice = (reading.notice + " · " if reading.notice else "") + "推理日志优先；不以旧上下文大小估算用量"
     return reading

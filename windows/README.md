@@ -3,7 +3,15 @@
 <img src="assets/agent-hud-icon-v1.png" width="112" alt="Agent HUD 可爱助手图标">
 
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
-一个贴边停靠的桌面悬浮 HUD。目前注册 12 种工具：原有 5 种额度接入、6 种本地会话用量接入，以及 Devin CLI 的缓存额度；各工具实际能力见版本说明。
+一个贴边停靠的桌面悬浮 HUD。目前注册 16 种工具；额度、余额和本地会话用量的支持因客户端而异，具体见版本与移植状态说明。
+
+### Windows v0.1.8 · 2026-10-19
+
+- 新增 Hermes Agent（含 profile）、ZCode、Devin CLI 的 SQLite 本地用量，以及 Copilot CLI 的关闭快照、Grok CLI 的更新/推理日志。SQLite 连接只读，跟踪 WAL 更新；每次解析限时 2.4 秒、最多 100,000 条，超过限制明确标记统计不完整，不修改客户端数据库。
+- Hermes 使用模型用量表，没有该行时回退会话总数；记录归于首次使用时间，不能还原每次请求时刻。Copilot 只计关闭快照差值，首个不完整快照只作基线，不代表运行中实时用量。Grok 的逐次推理日志优先于同一会话的汇总，不以旧上下文大小估算消耗。
+- 统计新增模型与 Token 类型筛选、缓存读取占输入比例、按星期和小时聚合的本地活动热图。图表、表格和热图遵循相同筛选；显示分项覆盖率，缺失模型或分项不猜测。
+- Codex、OpenCode 和新增本地源的可用模型/缓存分项接入同一汇总；已记录的零费用保留为零，异常或未知费用不计入。按 Token 类型查看时不任意分摊费用。
+- 参照上游 `bf19ac9` 的 [HermesSessions.swift](https://github.com/jazzenchen/agent-hud-open/blob/bf19ac98da11fe0f5967f5a124d42f0da4bf2cf9/Sources/AgentHUDCore/Providers/Hermes/HermesSessions.swift)、`ZCodeSessions.swift`、`DevinSessions.swift`、`CopilotSessions.swift`、`GrokSessions.swift` 和用量口径；继续复用既有缓存、扫描器和 Qt 绘图，不增加依赖。
 
 ### Windows v0.1.7 · 2026-10-19
 
@@ -29,8 +37,8 @@
 | --- | --- |
 | 停靠、悬停、额度、提前耗尽预警 | 已实现，保留本机单实例与隐私设置 |
 | 5h / 24h / 7d / 30d、按 Agent 查看 | v0.1.6 已实现；取决于客户端仍保留的历史 |
-| 18 种 Agent 的全量接入 | 注册 12 种；其中 6 种新增本地用量、Devin 仅缓存额度，尚未全量覆盖 |
-| 按模型、Token 类型、缓存命中率、热图 | 待移植 |
+| 18 种 Agent 的全量接入 | 注册 16 种；Cursor、Grok Bot 未适配，新增接入主要为本地用量，并不都包含在线额度 |
+| 按模型、Token 类型、缓存比例、热图 | v0.1.8 已实现；仅覆盖客户端实际记录的分项 |
 | 会话、轮次、调用与回到会话 | 待移植 |
 | 精确工作/等待状态、回复提醒 | 当前仅有 Token 活动推断，待接入真实生命周期 |
 | 批准、提问、客户端回调 | 待移植；不能以模拟批准替代客户端协议 |

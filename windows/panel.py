@@ -41,7 +41,7 @@ def cost_text(entries) -> str:
     counted = False
     for _name, _colour, reading in entries:
         cost = getattr(reading, "today_cost", None)
-        if not cost:
+        if cost is None:
             continue
         value = money.to_usd(cost, getattr(reading, "cost_currency", None))
         if value is None:

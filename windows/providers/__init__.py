@@ -18,6 +18,10 @@ REGISTRY = [
     ("qwen", "Qwen Code", "QW"),
     ("openclaw", "OpenClaw", "OA"),
     ("devin", "Devin CLI", "DV"),
+    ("hermes", "Hermes Agent", "HM"),
+    ("zcode", "ZCode", "ZC"),
+    ("copilot", "Copilot CLI", "CP"),
+    ("grok", "Grok CLI", "GK"),
 ]
 
 ORDER = [pid for pid, _, _ in REGISTRY]

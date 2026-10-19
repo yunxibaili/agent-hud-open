@@ -1,6 +1,6 @@
 <h1 align="center">Agent HUD</h1>
 
-> **Windows HUD**: this checkout adds `windows/`, a **Python + PySide6** edge dock with quota alerts, local usage statistics and a tray icon. Twelve tools are registered: Codex, OpenCode, Antigravity, WorkBuddy and DSH; local transcript usage for Claude Code, CodeBuddy, Pi, Kimi, Qwen Code and OpenClaw; cached quota for Devin CLI. Capabilities differ by client and do not yet match all macOS features. Its geometry, state machine, palette and provider formats are adapted from this upstream project; licenses and attribution are retained. Double-click `windows/run.vbs` to start silently, without a taskbar window; see [windows/README.md](windows/README.md) (Chinese).
+> **Windows HUD**: this checkout adds `windows/`, a **Python + PySide6** edge dock with quota alerts, local usage statistics and a tray icon. Sixteen tools are registered, including local usage for Claude Code, CodeBuddy, Pi, Kimi, Qwen Code, OpenClaw, Hermes, ZCode, Copilot CLI, Grok CLI and Devin CLI. Statistics include time ranges, agent/model/token-kind filters, cache ratios and an activity heatmap. Capabilities differ by client and do not yet match all macOS features. Its geometry, state machine, palette and provider formats are adapted from this upstream project; licenses and attribution are retained. Double-click `windows/run.vbs` to start silently, without a taskbar window; see [windows/README.md](windows/README.md) (Chinese).
 
 <p align="center">
   <strong>Your agents, at a glance.</strong><br>

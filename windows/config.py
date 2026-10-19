@@ -59,6 +59,10 @@ DEFAULTS = {
         "qwen": {"enabled": True},
         "openclaw": {"enabled": True},
         "devin": {"enabled": True},
+        "hermes": {"enabled": True},
+        "zcode": {"enabled": True},
+        "copilot": {"enabled": True},
+        "grok": {"enabled": True},
     },
     "currency": {
         "usd_cny": 7.14,         # CNY per 1 USD; every cost is shown in dollars
