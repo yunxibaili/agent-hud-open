@@ -219,6 +219,7 @@ class DockLevels:
 
     def open_panel(self, index: int | None = None) -> None:
         if index is not None:
+            self.clicked_index = None
             self.last_index = index
         self.panel.reduce(Event.FORCE_OPEN)
         self.peek.reduce(Event.FORCE_OPEN)

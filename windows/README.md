@@ -3,6 +3,10 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
 
+### Windows v0.1.4 · 2026-10-19
+
+- 按 Alt 悬停指定 Agent 时释放旧的点击焦点，让强制展开的目标生效；在面板空白处按 Alt 时仍保留当前目标。
+
 ### Windows v0.1.3 · 2026-10-19
 
 - 卡片自动关闭时清除点击焦点，避免下一次悬停仍显示旧 Agent，以及重新点击同一图标时只触发关闭。固定面板和关闭前的防抖行为不变。
