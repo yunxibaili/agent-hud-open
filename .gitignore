@@ -20,6 +20,19 @@ signing/
 *.mobileprovision
 *.provisionprofile
 
+# Windows HUD (windows/)
+windows/__pycache__/
+windows/providers/__pycache__/
+windows/config.json
+windows/history.json
+windows/.hud-quit
+windows/hud.stderr.log
+windows/_*
+windows/hud_recovered.py
+windows/assets/avatar.png
+windows/*.png
+shot_*.png
+
 # Local artifacts
 .DS_Store
 *.log

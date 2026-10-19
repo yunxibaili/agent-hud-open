@@ -1,5 +1,7 @@
 <h1 align="center">Agent HUD</h1>
 
+> **Windows 桌面额度小工具**：本仓库新增了 `windows/`，用 **Python + PySide6** 把 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 五个工具的额度做成**贴边停靠、绝不悬空**的悬浮胶囊：四边磁吸 + 刘海模式 + 3px 贴边隐身（鼠标穿透）+ 三级展开（紧凑图标条 → 单行 Hover Line → 完整卡片面板）+ 系统托盘。停靠几何与悬停状态机逐行照搬 `NotchGeometry.swift` / `HoverMachine.swift`，配色与品牌图标取自 `Theme/StatusPalette.swift` 与 `Resources/*.png`。双击 `windows/run.vbs` 静默启动，详见 [windows/README.md](windows/README.md)。
+
 <p align="center">
   <strong>你的 Agent，抬眼可见。</strong><br>
   Claude Code、Codex 以及另外 15 款 agent 的用量、Token 与会话，就在 Mac 灵动岛或任意屏幕边缘。

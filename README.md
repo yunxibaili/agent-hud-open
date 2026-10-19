@@ -1,5 +1,7 @@
 <h1 align="center">Agent HUD</h1>
 
+> **Windows quota dock**: this checkout adds `windows/` - a **Python + PySide6** floating dock that parks on a screen edge (never mid-air): four-edge snapping, a notch mode, a 3px click-through edge peek, and a three-level reveal (compact marks, a one-line hover capsule, the full card panel) plus a tray icon, for **Codex / OpenCode / Antigravity / WorkBuddy / DSH** only. Its docking geometry and hover state machine are line-by-line ports of `NotchGeometry.swift` and `HoverMachine.swift`, with colours and brand artwork from `Theme/StatusPalette.swift` and `Resources/*.png`. Double-click `windows/run.vbs` to start it silently; see [windows/README.md](windows/README.md) (Chinese).
+
 <p align="center">
   <strong>Your agents, at a glance.</strong><br>
   Usage, tokens and sessions for Claude Code, Codex and 15 more agents, at your Mac's notch or any screen edge.
