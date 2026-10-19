@@ -392,7 +392,7 @@ class DockBar(QWidget):
             return balance
         today = getattr(report, "today_tokens", None)
         if today:
-            return model.human_tokens(today)
+            return model.human_tokens(today, digits=0)
         return "--"
 
     # -- motion --------------------------------------------------------------
@@ -874,12 +874,20 @@ class DockBar(QWidget):
             painter.drawText(ring, int(Qt.AlignCenter), report.mark)
 
         if not text.isEmpty():
-            painter.setFont(self.text_font)
             painter.setPen(color if report.ok else T.IDLE)
             label = self.slot_percent(report, slot)
-            painter.drawText(text, int(Qt.AlignLeft | Qt.AlignVCenter),
-                             label if label is not None
-                             else self.remaining_text(report))
+            label = label if label is not None else self.remaining_text(report)
+            font = QFont(self.text_font)
+            available = max(1.0, text.width() - 2)
+            width = QFontMetrics(font).horizontalAdvance(label)
+            if width > available:
+                # Fit the number inside its slot; never resize the dock or clip its unit.
+                font.setPointSizeF(max(8.0, font.pointSizeF() * available / width))
+                width = QFontMetrics(font).horizontalAdvance(label)
+                if width > available:
+                    font.setStretch(max(1, int(100 * available / width)))
+            painter.setFont(font)
+            painter.drawText(text, int(Qt.AlignLeft | Qt.AlignVCenter), label)
 
     @staticmethod
     def _use_gradient_pen(painter: QPainter, gradient, width: float = RING_STROKE) -> None:

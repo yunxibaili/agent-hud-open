@@ -156,10 +156,10 @@ def balance_level(currency: str, amount: float | None) -> str:
     return "ok"
 
 
-def human_tokens(value: int | None) -> str:
+def human_tokens(value: int | None, digits: int = 2) -> str:
     if value is None:
         return ""
     for limit, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k")):
         if abs(value) >= limit:
-            return f"{value / limit:.2f}{suffix}".replace(".00", "")
+            return f"{value / limit:.{digits}f}{suffix}".replace(".00", "")
     return str(value)
