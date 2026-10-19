@@ -79,6 +79,10 @@ def main(argv=None) -> int:
             log("watchdog: hud.py was asked to quit, stopping")
             return 0
 
+        if code == 0:
+            log("watchdog: clean exit or duplicate launch, stopping")
+            return 0
+
         consecutive_fast = consecutive_fast + 1 if lived < FAST_EXIT_SECONDS else 0
         if consecutive_fast >= BACKOFF_AFTER:
             log("watchdog: hud.py exited after %.0fs (code %s), backing off %.0fs"

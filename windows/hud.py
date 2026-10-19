@@ -55,19 +55,21 @@ from dock import DockBar, HEIGHT as DOCK_HEIGHT, MONTH_PID  # noqa: E402
 from panel import Panel  # noqa: E402
 from peek import LinePill, peek_segments, reminder_segments  # noqa: E402
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer  # noqa: E402
+from PySide6.QtCore import QLockFile, QPoint, QRect, QSize, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # noqa: E402
                            QPixmap)
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
 PILL_RESERVE = 680
 HOVER_FAST_MS = 33
 HOVER_SLOW_MS = 100
+FRAME_ACTIVE_MS = 16
+FRAME_IDLE_MS = 66
 REMINDER_SECONDS = 5.0
 CRITICAL_USED = 90.0
 HIDE_AFTER = 0.6
@@ -138,8 +140,8 @@ class Poller(threading.Thread):
                 self.out.put(report)
             except Exception:
                 return
-            key = "refresh_seconds" if report.ok else "retry_seconds"
-            interval = max(15.0, float(self.cfg.get(key, 120 if report.ok else 30)))
+            key = "refresh_seconds" if report.ok or not report.available else "retry_seconds"
+            interval = max(15.0, float(self.cfg.get(key, 120 if key == "refresh_seconds" else 30)))
             deadline = time.time() + interval
             while not self.stop.is_set() and time.time() < deadline:
                 self.stop.wait(0.2)
@@ -185,6 +187,7 @@ class HudWindow(QWidget):
         self._window_reserve = QSize()
 
         self.phase = 0.0
+        self._frame_at = time.monotonic()
         self.press_at: QPoint | None = None
         self.press_origin: QPoint | None = None
         self.dragging = False
@@ -240,7 +243,7 @@ class HudWindow(QWidget):
         self.clock_timer.start()
 
         self.anim_timer = QTimer(self)
-        self.anim_timer.setInterval(40)
+        self.anim_timer.setInterval(FRAME_ACTIVE_MS)
         self.anim_timer.timeout.connect(self._animate)
         self.anim_timer.start()
 
@@ -381,6 +384,8 @@ class HudWindow(QWidget):
             self.peek_pill.hide()
             self.panel.hide()
         self.tuck_anim.to("tuck", 0.0 if revealed else 1.0, 220, motion.OUT_CUBIC)
+        self._frame_at = time.monotonic()
+        self.anim_timer.start(FRAME_ACTIVE_MS)
         self.hover_timer.setInterval(HOVER_FAST_MS if revealed else HOVER_SLOW_MS)
         self._apply_geometry()
 
@@ -586,12 +591,12 @@ class HudWindow(QWidget):
                 if window.used_percent is None:
                     continue
                 before = (self.prev_used.get(report.pid) or {}).get(window.key)
+                self.prev_used.setdefault(report.pid, {})[window.key] = window.used_percent
                 if before is not None and before < CRITICAL_USED <= window.used_percent:
                     self._show_reminder(reminder_segments(
                         report.name, "%s 额度接近用尽" % window.short, "critical",
                         "已用 %.0f%%" % window.used_percent))
                     return
-                self.prev_used.setdefault(report.pid, {})[window.key] = window.used_percent
             active = self.history.is_active(report.pid)
             if self.was_active.get(report.pid) and not active and report.today_tokens:
                 self.was_active[report.pid] = active
@@ -699,10 +704,21 @@ class HudWindow(QWidget):
                 self._hide_reminder()
 
     def _animate(self) -> None:
+        if not self.revealed and not self.tuck_anim.running():
+            self.anim_timer.stop()
+            return
+        now = time.monotonic()
+        elapsed = min(0.25, now - self._frame_at)
+        self._frame_at = now
         active = any(self.history.is_active(pid) for pid in self.enabled)
-        self.phase += 0.01 * (1.9 if active else 1.0)
-        self.dock.advance(time.monotonic(), self.phase, self.phase * 2.0)
-        if self.dock.isVisible() and (self.revealed or self.tuck_anim.running()):
+        self.phase += elapsed / (1.2 if active else 3.6)
+        self.dock.advance(now, self.phase, now / 1.2)
+        loading = any(slot.loading for pid, slot in self.dock.slots.items() if pid != MONTH_PID)
+        interval = (FRAME_ACTIVE_MS if loading or self.dock.busy() or self.tuck_anim.running()
+                    else FRAME_IDLE_MS)
+        if self.anim_timer.interval() != interval:
+            self.anim_timer.setInterval(interval)
+        if self.dock.isVisible():
             self.dock.update()
 
     # -- interaction --------------------------------------------------------
@@ -849,6 +865,8 @@ class HudWindow(QWidget):
     def _on_tray(self, reason) -> None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.setVisible(not self.isVisible())
+            if self.isVisible():
+                self._reveal(True)
 
     def refresh_now(self) -> None:
         self.dock.play_flow()
@@ -975,6 +993,15 @@ def main(argv=None) -> int:
     app.setQuitOnLastWindowClosed(False)
     motion.detect_reduced()
 
+    instance_lock = QLockFile(str(HERE / ".hud.lock"))
+    instance_lock.setStaleLockTime(0)
+    if not instance_lock.tryLock(0):
+        if instance_lock.error() == QLockFile.LockError.LockFailedError:
+            log("already running; skipped duplicate launch")
+            return 0
+        log("could not acquire HUD lock: %s" % instance_lock.error())
+        return 1
+
     families = T.resolve_fonts()
     config.ensure_file()
     cfg = config.load()
@@ -996,6 +1023,7 @@ def main(argv=None) -> int:
         hud.levels.open_panel(args.peek if args.peek is not None else 0)
         hud._apply_level()
     code = app.exec()
+    instance_lock.unlock()
     log("stopped")
     return code
 

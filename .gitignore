@@ -26,6 +26,7 @@ windows/providers/__pycache__/
 windows/config.json
 windows/history.json
 windows/.hud-quit
+windows/.hud.lock
 windows/hud.stderr.log
 windows/_*
 windows/hud_recovered.py

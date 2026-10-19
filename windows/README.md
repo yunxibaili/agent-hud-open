@@ -3,6 +3,12 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
 
+### Windows v0.1.2 · 2026-10-19
+
+- 使用 [Qt QLockFile](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QLockFile.html) 防止同目录重复启动 HUD；重复启动的守护进程会退出，不反复拉起副本。
+- 收起完成后停止逐帧时钟，唤醒后恢复；动态内容使用 16ms 帧间隔，静止展开时降为 66ms。动画按真实经过时间推进。
+- 临界额度提醒记录本次状态后再触发，避免在持续超过阈值时重复提醒；未安装的工具保持正常刷新周期。
+
 ### Windows v0.1.1 · 2026-10-19
 
 - 恢复「月」按钮、独立月度页面和图标旁的美元估算；复用 `tokens.py` 的后台统计，扫描不占用界面线程。
