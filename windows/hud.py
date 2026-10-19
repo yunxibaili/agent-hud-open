@@ -62,7 +62,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -215,6 +215,8 @@ class HudWindow(QWidget):
         self.reminder = LinePill(int(DOCK_HEIGHT), self.content)
         self.reminder.background = QColor(0x1B, 0x1C, 0x22, 0xF2)
         self.panel = Panel(marks, PANEL_WIDTH, self.content)
+        self.panel.on_statistics = self._open_statistics
+        self.statistics_window = None
         for widget in (self.dock, self.peek_pill, self.reminder, self.panel):
             shadow = QGraphicsDropShadowEffect(widget)
             shadow.setBlurRadius(26)
@@ -864,6 +866,7 @@ class HudWindow(QWidget):
                            "QMenu::separator { height: 1px; background: #45454F; margin: 4px; }")
         menu.addAction("立即刷新", self.refresh_now)
         menu.addAction("月度总量", self._open_month_menu)
+        menu.addAction("用量统计", self._open_statistics)
         fixed = menu.addAction("固定面板")
         fixed.setCheckable(True)
         fixed.setChecked(self.levels.sticky)
@@ -917,6 +920,14 @@ class HudWindow(QWidget):
         self.show()
         self._reveal(True)
         self.show_month()
+
+    def _open_statistics(self) -> None:
+        if self.statistics_window is None:
+            from usage_view import UsageWindow
+            self.statistics_window = UsageWindow()
+        self.statistics_window.show()
+        self.statistics_window.raise_()
+        self.statistics_window.activateWindow()
 
     def _set_sticky(self, checked: bool) -> None:
         self.levels.sticky = bool(checked)

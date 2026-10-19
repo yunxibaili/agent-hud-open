@@ -16,7 +16,7 @@ import ui_theme as T
 from PySide6.QtCore import QRectF, QSize, Qt, QRect
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,  # noqa: E402
-                               QVBoxLayout, QWidget)
+                               QToolButton, QVBoxLayout, QWidget)
 
 CARD_RADIUS = 10
 HEIGHT_MS = 200                   # the card's bottom edge following its content
@@ -323,8 +323,8 @@ def draw_bars(painter: QPainter, plot: QRectF, layers, peak: int,
                 painter.drawRoundedRect(rect, radius, radius)
             bottom -= height
     painter.setPen(QColor(255, 255, 255, 26))
-    for hour in range(1, 24, 6):
-        x = plot.left() + (hour * 4) * step
+    for fraction in (0.25, 0.5, 0.75):
+        x = plot.left() + plot.width() * fraction
         painter.drawLine(int(x), int(plot.bottom()) - 3, int(x), int(plot.bottom()))
 
 
@@ -859,6 +859,13 @@ class Panel(QWidget):
         self.status.setFont(T.ui(9.0))
         self.status.setStyleSheet("color: %s;" % T.TEXT_FAINT.name())
         header.addWidget(self.status)
+        self.on_statistics = None
+        statistics = QToolButton()
+        statistics.setText("统计")
+        statistics.setToolTip("查看 5 小时、24 小时、7 天和 30 天用量")
+        statistics.setStyleSheet("color: #8AA0FF; background: transparent; border: 0;")
+        statistics.clicked.connect(lambda: self.on_statistics() if self.on_statistics else None)
+        header.addWidget(statistics)
         self.outer.addLayout(header)
 
         # No scroll container at all. The panel lays its cards straight out and

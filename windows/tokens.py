@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import glob
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -33,6 +34,8 @@ BUCKET_MINUTES = 15
 BUCKET_COUNT = 96
 WINDOW_SECONDS = BUCKET_COUNT * BUCKET_MINUTES * 60
 CACHE_SECONDS = 90.0
+RANGES = {"5h": (5 * 3600, 20), "24h": (24 * 3600, 96),
+          "7d": (7 * 86400, 168), "30d": (30 * 86400, 120)}
 
 #: Which Harness provider routes belong to which card. A turn is attributed to
 #: the route it used, so no two cards count the same request: the WorkBuddy
@@ -54,6 +57,7 @@ class TokenReading:
     cost_currency: str | None = None
     source: str = ""
     events: int = 0
+    ranges: dict = field(default_factory=dict)
 
     @property
     def window_total(self) -> int:
@@ -78,7 +82,7 @@ def _zstd_reader():
 
 
 def _start_of_today(now: float) -> float:
-    return datetime.datetime.combine(datetime.date.today(),
+    return datetime.datetime.combine(datetime.datetime.fromtimestamp(now).date(),
                                      datetime.time.min).timestamp()
 
 
@@ -91,13 +95,28 @@ def _bucketize(events, now: float, currency: str | None = None,
     """Fold (timestamp, tokens, cost) triples into the 15-minute buckets."""
     reading = TokenReading(pid=pid, source=source)
     reading.events = len(events)
+    reading.ranges = {key: {"tokens": 0, "cost_usd": None, "priced_tokens": 0,
+                            "buckets": [0] * count}
+                      for key, (_seconds, count) in RANGES.items()}
     midnight = _start_of_today(now)
     cost = 0.0
     for event in events:
         stamp, tokens = event[0], event[1]
+        if not math.isfinite(stamp) or not math.isfinite(tokens) or tokens < 0:
+            continue
         age = now - stamp
         if age < 0:
             continue
+        for key, (seconds, count) in RANGES.items():
+            if age >= seconds:
+                continue
+            entry = reading.ranges[key]
+            entry["tokens"] += int(tokens)
+            entry["buckets"][count - 1 - int(age // (seconds / count))] += int(tokens)
+            if (currency == "USD" and len(event) > 2 and event[2] is not None
+                    and math.isfinite(event[2]) and event[2] >= 0):
+                entry["cost_usd"] = (entry["cost_usd"] or 0.0) + event[2]
+                entry["priced_tokens"] += int(tokens)
         if tokens:
             index = int(age // (BUCKET_MINUTES * 60))
             if 0 <= index < BUCKET_COUNT:
@@ -120,43 +139,89 @@ def _bucketize(events, now: float, currency: str | None = None,
 def _codex_rollout_parser(path: str, cutoff: float | None = None) -> list:
     import datetime
     out = []
-    if cutoff is None:
-        cutoff = time.time() - 26 * 3600
+    previous = None
+    started = None
+    inherited_ordinal = None
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if '"token_count"' not in line:
+            if '"token_count"' not in line and '"session_meta"' not in line:
                 continue
             try:
                 record = json.loads(line)
             except Exception:
                 continue
-            if record.get("type") != "event_msg":
+            if not isinstance(record, dict):
                 continue
             payload = record.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            if record.get("type") == "session_meta":
+                if started is None and payload.get("id"):
+                    try:
+                        started = datetime.datetime.fromisoformat(
+                            (payload.get("timestamp") or record["timestamp"]).replace("Z", "+00:00")).timestamp()
+                        inherited_ordinal = payload.get("subagent_history_start_ordinal")
+                    except (ValueError, TypeError, KeyError):
+                        pass
+                continue
+            if record.get("type") != "event_msg":
+                continue
             if payload.get("type") != "token_count":
                 continue
             stamp = record.get("timestamp")
             info = payload.get("info") or {}
-            tokens = (info.get("last_token_usage") or {}).get("total_tokens")
-            if not isinstance(tokens, (int, float)) or tokens <= 0 or not stamp:
+            if not isinstance(info, dict):
                 continue
+            totals = info.get("total_token_usage") or {}
+            if not isinstance(totals, dict):
+                continue
+            counts = [totals.get(key) for key in ("input_tokens", "output_tokens")]
+            if any(not isinstance(v, int) or v < 0 for v in counts) or not stamp:
+                continue
+            if previous is not None and all(value >= old for value, old in zip(counts, previous)):
+                tokens = sum(value - old for value, old in zip(counts, previous))
+            else:
+                last = info.get("last_token_usage") or {}
+                if not isinstance(last, dict):
+                    continue
+                values = [last.get(key, counts[index]) for index, key in enumerate(("input_tokens", "output_tokens"))]
+                if any(not isinstance(value, int) or value < 0 for value in values):
+                    previous = counts
+                    continue
+                tokens = sum(values)
+            previous = counts
             try:
                 moment = datetime.datetime.fromisoformat(
                     stamp.replace("Z", "+00:00")).timestamp()
             except Exception:
                 continue
-            if moment >= cutoff:
+            ordinal = record.get("ordinal")
+            if (started is not None and moment < started
+                    or isinstance(inherited_ordinal, int) and isinstance(ordinal, int) and ordinal <= inherited_ordinal):
+                continue
+            if not isinstance(tokens, (int, float)) or not math.isfinite(tokens) or tokens <= 0:
+                continue
+            if cutoff is None or moment >= cutoff:
                 out.append((moment, int(tokens)))
     return out
 
-def _codex_rollout_files(home) -> list[str]:
+def _codex_rollout_files(home, cutoff: float | None = None) -> list[str]:
     files = []
     for root in (home / "sessions", home / "archived_sessions"):
         if root.exists():
             files += glob.glob(os.path.join(str(root), "**", "rollout-*.jsonl"),
                                recursive=True)
-    cutoff = time.time() - 26 * 3600
-    return [p for p in files if os.path.getmtime(p) >= cutoff]
+    cutoff = time.time() - 32 * 86400 if cutoff is None else cutoff
+    newest = {}
+    for path in files:
+        try:
+            modified = os.path.getmtime(path)
+            name = os.path.basename(path)
+            if modified >= cutoff and (name not in newest or modified > newest[name][0]):
+                newest[name] = (modified, path)
+        except OSError:
+            continue
+    return [row[1] for row in newest.values()]
 
 def _codex(now: float) -> TokenReading:
     home = codex_provider.codex_home()
@@ -202,16 +267,13 @@ def _opencode_message_tokens(data: dict) -> tuple[int, float | None]:
 def _opencode(now: float, extra_events=None) -> TokenReading:
     if extra_events is None:
         extra_events = [(ts, tok) for ts, tok in harness_by_route(now)["opencode"]]
-    cutoff_ms = int((now - WINDOW_SECONDS - 3600) * 1000)
+    cutoff_ms = int((_start_of_today(now) - 32 * 86400) * 1000)
     events: list[tuple[float, int, float | None]] = []
     source = ""
     for root in _opencode_roots():
         db = root / "opencode.db"
         if db.exists():
             try:
-                con = sqlite3.connect("file:%s?mode=ro" % str(db).replace("\\", "/"),
-                                      uri=True, timeout=20)
-                con.execute("PRAGMA query_only=1")
                 def _parse_db(p):
                     c = sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"),
                                         uri=True, timeout=20)
@@ -222,8 +284,7 @@ def _opencode(now: float, extra_events=None) -> TokenReading:
                             "WHERE time_created > ?", (cutoff_ms,)).fetchall()
                     finally:
                         c.close()
-                rows = cached_rows(str(db), _parse_db)
-                con.close()
+                rows = cached_rows(str(db), _parse_db, cache_tag=cutoff_ms)
                 for created, blob in rows:
                     try:
                         data = json.loads(blob)
@@ -244,7 +305,7 @@ def _opencode(now: float, extra_events=None) -> TokenReading:
             pattern = os.path.join(str(root), "storage", "message", "**", "*.json")
             for path in glob.glob(pattern, recursive=True):
                 try:
-                    if os.path.getmtime(path) < now - WINDOW_SECONDS - 3600:
+                    if os.path.getmtime(path) * 1000 < cutoff_ms:
                         continue
                     data = json.loads(Path(path).read_text(encoding="utf-8",
                                                            errors="replace"))
@@ -396,25 +457,37 @@ def _workbuddy_local() -> list:
     out = []
     roots = [userprofile() / ".workbuddy", userprofile() / ".codebuddy",
              appdata() / "WorkBuddy", localappdata() / "CodeBuddyExtension"]
+    seen = set()
     for root in roots:
         if not root.exists():
             continue
         for pattern in ("sessions/**/*.jsonl", "projects/**/*.jsonl", "**/*.jsonl"):
             for path in glob.glob(os.path.join(str(root), pattern), recursive=True):
+                identity = os.path.normcase(os.path.realpath(path))
+                if identity in seen:
+                    continue
+                seen.add(identity)
                 try:
                     if os.path.getsize(path) > 64 * 1024 * 1024:
                         continue
-                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                        for line in fh:
-                            if '"usage"' not in line:
-                                continue
-                            try:
-                                record = json.loads(line)
-                            except Exception:
-                                continue
-                            out += _transcript_usage(record)
+                    out += cached_rows(path, _transcript_rows)
                 except Exception:
                     continue
+    return out
+
+
+def _transcript_rows(path: str) -> list:
+    out = []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if '"usage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+                if isinstance(record, dict):
+                    out += _transcript_usage(record)
+            except (ValueError, TypeError):
+                continue
     return out
 
 
@@ -520,18 +593,9 @@ def codex_month(now: float | None = None) -> int:
         home = codex_provider.codex_home()
     except Exception:
         return 0
-    for root in (home / "sessions", home / "archived_sessions"):
-        if not root.exists():
-            continue
-        for file in glob.glob(os.path.join(str(root), "**", "rollout-*.jsonl"),
-                              recursive=True):
-            try:
-                if os.path.getmtime(file) < start:
-                    continue
-            except OSError:
-                continue
-            rows = cached_rows(file, lambda p: _codex_rollout_parser(p, start))
-            total += sum(int(tokens) for stamp, tokens in rows if stamp >= start)
+    for file in _codex_rollout_files(home, start):
+        rows = cached_rows(file, _codex_rollout_parser)
+        total += sum(int(tokens) for stamp, tokens in rows if start <= stamp <= now)
     return total
 
 
@@ -626,22 +690,33 @@ _SOURCES = {"codex": _codex, "opencode": _opencode, "workbuddy": _workbuddy,
 
 _cache: dict = {"at": 0.0, "data": None, "busy": False}
 _lock = threading.Lock()
-# (path, mtime, size) -> parsed payload, so large log files are read once and
+# (path, query scope) -> (file/WAL stamp, payload), so large logs are read once and
 # re-used until they actually change on disk.
 _file_cache: dict = {}
 
-def cached_rows(path: str, parser) -> list:
-    """Parse a log file once, keyed by (path, mtime, size)."""
+def cached_rows(path: str, parser, cache_tag=None) -> list:
+    """Cache one current payload per path, including SQLite WAL changes."""
     try:
         stat = os.stat(path)
     except OSError:
         return []
-    key = (path, stat.st_mtime, stat.st_size)
-    hit = _file_cache.get(key[:1] + (stat.st_mtime, stat.st_size))
-    if hit is not None:
-        return hit
+    key = (path, cache_tag)
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    for suffix in ("-wal",):
+        try:
+            related = os.stat(path + suffix)
+            stamp += (related.st_mtime_ns, related.st_size)
+        except OSError:
+            stamp += (None, None)
+    with _lock:
+        hit = _file_cache.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
     rows = parser(path)
-    _file_cache[key] = rows
+    with _lock:
+        for old in [old for old in _file_cache if old[0] == path and old != key]:
+            del _file_cache[old]
+        _file_cache[key] = (stamp, rows)
     return rows
 
 

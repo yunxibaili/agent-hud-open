@@ -5,6 +5,30 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
 
+### Windows v0.1.6 · 2026-10-19
+
+- 卡片右上角和托盘新增「用量统计」入口：5 小时、24 小时、7 天、30 天切换、Agent 筛选、堆叠趋势和来源已记录的美元费用。统计窗口不占任务栏，关闭后停止自己的刷新时钟。
+- 扫描和汇总继续在既有后台线程执行；界面仅使用采集快照，未知费用显示 `—` 并标明计价覆盖比例，不把未知当免费，不发起推理请求。
+- Codex 改按累计输入/输出差值计量，跳过继承历史与重复额度事件；归档副本按同名 rollout 的最新文件去重。修复月度/每日解析缓存共用导致较早记录漏计的问题。
+- 修复 WorkBuddy 多个 glob 重复读取同一文件的问题；SQLite 缓存跟踪 WAL 变化，扫描范围扩至 32 天以覆盖本月及最近 30 天。
+- 移植依据：上游 `bf19ac9` 的 [用量口径](https://github.com/jazzenchen/agent-hud-open/blob/bf19ac98da11fe0f5967f5a124d42f0da4bf2cf9/docs/usage-semantics.md) 与 `CodexTranscripts.swift`；复用 Windows 的 `TokenReading`、`draw_bars` 和托盘入口，无新依赖。
+
+### Windows 移植状态
+
+对照上游 `bf19ac9`（2026-10-18）。仓内 Swift 源码存在不等于 Windows 已提供相同功能。
+
+| 能力 | Windows 状态 |
+| --- | --- |
+| 停靠、悬停、额度、提前耗尽预警 | 已实现，保留本机单实例与隐私设置 |
+| 5h / 24h / 7d / 30d、按 Agent 查看 | v0.1.6 已实现；取决于客户端仍保留的历史 |
+| 18 种 Agent 的全量接入 | 目前 5 种，继续适配各自数据源 |
+| 按模型、Token 类型、缓存命中率、热图 | 待移植 |
+| 会话、轮次、调用与回到会话 | 待移植 |
+| 精确工作/等待状态、回复提醒 | 当前仅有 Token 活动推断，待接入真实生命周期 |
+| 批准、提问、客户端回调 | 待移植；不能以模拟批准替代客户端协议 |
+| 每屏独立布局与设置、多形态 Bot | 待移植 |
+| 局域网、iPhone / Watch、iCloud Remote | 未实现；Apple 框架、官方服务及付费能力不能直接搬到 Windows |
+
 ### Windows v0.1.5 · 2026-10-19
 
 - 应用与系统托盘启用新绘制的可爱图标，托盘右下角保留额度状态色点；继续仅驻留托盘，不占任务栏。
