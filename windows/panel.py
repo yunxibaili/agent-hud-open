@@ -16,7 +16,7 @@ import providers
 import ui_theme as T
 from PySide6.QtCore import QRectF, QSize, Qt, QRect
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,  # noqa: E402
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea, QSizePolicy,  # noqa: E402
                                QToolButton, QVBoxLayout, QWidget)
 
 CARD_RADIUS = 10
@@ -745,9 +745,7 @@ class MonthCard(QWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
 
     def sizeHint(self) -> QSize:
-        holder = self.parentWidget()
-        width = holder.width() if holder is not None else 472
-        return QSize(width, 128 + 22 * max(1, len(self.rows)))
+        return QSize(0, 128 + 22 * max(1, len(self.rows)))
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -851,9 +849,9 @@ class Panel(QWidget):
         self.outer = QVBoxLayout(self)
         self.outer.setContentsMargins(13, 11, 13, 13)
         self.outer.setSpacing(8)
-        self.outer.setAlignment(Qt.AlignTop)
 
         header = QHBoxLayout()
+        self.header = header
         header.setSpacing(8)
         caption = QLabel("AGENT HUD")
         caption.setFont(T.title(9.5, QFont.DemiBold, 1.4))
@@ -873,12 +871,30 @@ class Panel(QWidget):
         header.addWidget(statistics)
         self.outer.addLayout(header)
 
-        # No scroll container at all. The panel lays its cards straight out and
-        # asks for the height they need, so everything is on screen at once -
-        # and the cards keep their own minimum heights, so nothing is squeezed.
-        self.cards_box = QVBoxLayout()
+        self.scroll = QScrollArea(self)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setMinimumSize(0, 0)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: 0; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: #45454F; border-radius: 4px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.card_body = QWidget()
+        self.card_body.setAutoFillBackground(False)
+        self.cards_box = QVBoxLayout(self.card_body)
+        self.cards_box.setContentsMargins(0, 0, 0, 0)
         self.cards_box.setSpacing(8)
-        self.outer.addLayout(self.cards_box)
+        self.cards_box.setAlignment(Qt.AlignTop)
+        self.cards_box.setSizeConstraint(QLayout.SetMinimumSize)
+        self.scroll.setWidget(self.card_body)
+        self.card_body.setAutoFillBackground(False)
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.outer.addWidget(self.scroll, 1)
 
     def set_month(self, totals) -> None:
         """The month page: one card and nothing else."""
@@ -891,6 +907,8 @@ class Panel(QWidget):
                 widget.hide()
                 widget.deleteLater()
         self.ghost.release()
+        if self._shown_pid != "__month__":
+            self.scroll.verticalScrollBar().setValue(0)
         card = MonthCard(totals, self)
         self.cards_box.addWidget(card)
         card.show()
@@ -912,7 +930,7 @@ class Panel(QWidget):
         # Measured from the width the panel was given, not from QWidget.width():
         # before the first layout that answers with the default 640, and cards
         # built 586 wide inside a 472 panel are clipped along the right edge.
-        inner = self.fixed_width - 2 * 13 - 2 * 14
+        inner = self.fixed_width - 2 * 13 - 2 * 14 - 8
         if totals:
             totals_card = TotalsCard(totals, inner, self)
             self.totals_card = totals_card
@@ -983,6 +1001,7 @@ class Panel(QWidget):
         if same or motion.REDUCED or not self.isVisible():
             if not same:
                 self.ghost.release()
+                self.scroll.verticalScrollBar().setValue(0)
             return
         if self.width() <= 1 or self.height() <= 1:
             return
@@ -990,6 +1009,7 @@ class Panel(QWidget):
         # mid-fade dissolves out of what is actually visible rather than jumping
         # back to an older card.
         self.ghost.snapshot_from(self)
+        self.scroll.verticalScrollBar().setValue(0)
         self.anim.snap("cross", 1.0)
         self.anim.to("cross", 0.0, CROSS_MS, motion.IN_OUT_CUBIC)
 
@@ -1013,7 +1033,7 @@ class Panel(QWidget):
         if count > 1:
             cards += box.spacing() * (count - 1)
         margins = self.outer.contentsMargins()
-        header = max(16, self.status.sizeHint().height())
+        header = max(16, self.header.sizeHint().height())
         natural = max(240, cards + header + 8 + margins.top() + margins.bottom())
         stable = getattr(self, "stable_h", 0)
         if stable:

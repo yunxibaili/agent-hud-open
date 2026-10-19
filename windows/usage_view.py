@@ -9,7 +9,8 @@ import ui_theme as T
 from panel import draw_bars
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView,
+                               QLayout, QScrollArea,
                                QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 
@@ -56,7 +57,7 @@ class UsageWindow(QWidget):
         super().__init__(None, Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setWindowTitle("Agent HUD · 用量统计")
         self.resize(840, 720)
-        self.setMinimumSize(600, 600)
+        self.setMinimumSize(480, 360)
         self.setStyleSheet(
             "QWidget { background: #16161A; color: #EDEDF0; }"
             "QComboBox { background: #25252D; border: 1px solid #45454F; padding: 5px; }"
@@ -64,7 +65,14 @@ class UsageWindow(QWidget):
             "QHeaderView::section { background: #25252D; padding: 6px; border: 0; }"
         )
         self.setFont(T.ui(10))
-        box = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(self)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        box = QVBoxLayout(body)
+        box.setSizeConstraint(QLayout.SetMinimumSize)
         box.setContentsMargins(18, 16, 18, 16)
         box.setSpacing(12)
         filters = QHBoxLayout()
@@ -110,11 +118,14 @@ class UsageWindow(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setWordWrap(False)
+        self.table.setMinimumHeight(180)
         box.addWidget(self.table, 1)
         self.note = QLabel()
         self.note.setWordWrap(True)
         self.note.setStyleSheet("color: #8E8E93;")
         box.addWidget(self.note)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
         self.snapshot = None
         self.period.currentIndexChanged.connect(self.refresh)
         self.agent.currentIndexChanged.connect(self.refresh)

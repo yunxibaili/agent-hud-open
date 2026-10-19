@@ -49,6 +49,7 @@ import motion  # noqa: E402
 import peek as peek_module  # noqa: E402
 import placement as geo  # noqa: E402
 import providers  # noqa: E402
+import running  # noqa: E402
 import tokens  # noqa: E402
 import ui_theme as T  # noqa: E402
 import winx  # noqa: E402
@@ -63,7 +64,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.9"
+VERSION = "0.1.10"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -175,6 +176,9 @@ class HudWindow(QWidget):
         self.reports: dict[str, model.ProviderReport] = {}
         self.queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
+        self.running_agents: set[str] = set()
+        self.runtime_known = False
+        self.runtime_queue: queue.Queue = queue.Queue()
         self.enabled = [pid for pid in providers.ORDER
                         if (cfg.get("providers", {}).get(pid, {}) or {}).get("enabled", True)]
         self.history = history_module.History()
@@ -261,6 +265,10 @@ class HudWindow(QWidget):
         self.reminder_timer.timeout.connect(self._hide_reminder)
 
         self.start_pollers()
+        self.runtime_thread = threading.Thread(target=running.watch,
+                                               args=(self.runtime_queue, self.stop_event),
+                                               name="agent-processes", daemon=True)
+        self.runtime_thread.start()
         money.set_rate((cfg.get("currency") or {}).get("usd_cny", money.DEFAULT_USD_CNY))
         self.token_scanner = tokens.Scanner(stop=self.stop_event)
         self.token_scanner.start()
@@ -397,12 +405,13 @@ class HudWindow(QWidget):
     def _bar_reports(self) -> list[model.ProviderReport]:
         out = []
         for pid in self.enabled:
+            if pid not in self.running_agents:
+                continue
             report = self.reports.get(pid)
             if report is None:
                 name, mark = providers.META[pid]
                 report = model.ProviderReport(pid=pid, name=name, mark=mark)
-            if report.available:
-                out.append(report)
+            out.append(report)
         return out
 
     def _dock_reports(self) -> list[model.ProviderReport]:
@@ -501,8 +510,10 @@ class HudWindow(QWidget):
                     burn, burn_window = best[1], best[2]
             entries.append((report, focused, reading, burn, burn_window))
         stamp = max((r.updated_at for r in reports), default=0)
-        totals = [(r.name, T.agent_color(r.pid), (self.readings or {}).get(r.pid))
-                  for r in reports if r.pid != MONTH_PID]
+        totals = [(name, T.agent_color(pid), reading)
+                  for pid, name, _mark in providers.REGISTRY
+                  if (reading := (self.readings or {}).get(pid)) is not None
+                  and (reading.events or pid in self.running_agents)]
         self.panel.begin_crossfade(focus_pid)
         self.panel.set_reports(entries, self.warn, self.crit, stamp, self.interval, totals)
         self.panel.outer.activate()
@@ -540,8 +551,11 @@ class HudWindow(QWidget):
             if index == len(self._bar_reports()):
                 if not self.month_page:
                     self.show_month()
-            else:
-                self.levels.open_panel(index if index >= 0 else None)
+            elif index >= 0:
+                self.month_page = False
+                self.levels.open_panel(index)
+            elif not self.month_page:
+                self.levels.open_panel(None)
             self.alt_opened = True
         elif self.alt_opened and not alt_pressed():
             self.alt_opened = False
@@ -659,6 +673,18 @@ class HudWindow(QWidget):
         before = tuple(r.pid for r in self._bar_reports())
         while True:
             try:
+                agents = self.runtime_queue.get_nowait()
+            except queue.Empty:
+                break
+            known = agents is not None
+            agents = set(agents or ()) & set(providers.ORDER)
+            if known != self.runtime_known or agents != self.running_agents:
+                self.runtime_known = known
+                self.running_agents = agents
+                log("running agents: %s" % (",".join(sorted(agents)) if known else "unavailable"))
+                changed = True
+        while True:
+            try:
                 data = self.month_queue.get_nowait()
             except queue.Empty:
                 break
@@ -694,7 +720,7 @@ class HudWindow(QWidget):
         if before != tuple(r.pid for r in self._bar_reports()):
             self.levels.collapse()
             self.month_page = False
-            if self.levels.sticky:
+            if self.levels.sticky and self._bar_reports():
                 self.levels.open_panel(0)
         self._audit(self._bar_reports())
         self._refresh_dock()
@@ -719,7 +745,8 @@ class HudWindow(QWidget):
                 worst = level
             parts.append("%s %s" % (report.name.split(" ")[0], DockBar.slot_text(report)))
         self.tray.setIcon(self._tray_icon(worst))
-        self.tray.setToolTip("Agent HUD · " + " · ".join(parts))
+        status = " · ".join(parts) if parts else ("暂无运行中的 Agent" if self.runtime_known else "运行检测暂不可用")
+        self.tray.setToolTip("Agent HUD · " + status)
 
     def _clock_tick(self) -> None:
         if self.panel.isVisible():
