@@ -4,9 +4,8 @@ Every client keeps its own dated record of what it spent:
 
 * Codex   - the token_count events in its rollout logs,
 * OpenCode- the assistant rows of opencode.db (or storage/message/*.json),
-* WorkBuddy - the WorkBuddy/CodeBuddy logs, plus every DeepSeek Harness turn
-  that the dsh-workbuddy-connect plugin routed to the workbuddy provider,
-* DSH     - the Harness turns routed to DeepSeek's own endpoints.
+* WorkBuddy - the WorkBuddy client's own logs,
+* DSH     - all Harness turns, including those billed through another service.
 
 The quantity counted is "tokens the model touched": input + output + cache
 writes + cache reads, with reasoning folded into output where a client reports
@@ -38,15 +37,9 @@ RANGES = {"5h": (5 * 3600, 20), "24h": (24 * 3600, 96),
           "7d": (7 * 86400, 168), "30d": (30 * 86400, 120)}
 TOKEN_KINDS = {"input": "输入（非缓存）", "output": "输出", "cache_read": "缓存读取", "cache_write": "缓存写入"}
 
-#: Which Harness provider routes belong to which card. A turn is attributed to
-#: the route it used, so no two cards count the same request: the WorkBuddy
-#: plugin's turns go to the WorkBuddy card, and every other Harness turn - the
-#: DeepSeek endpoints and the OpenCode Go pool alike - is Harness's own work.
+# Billing routes describe the service used, never the execution client.
 WORKBUDDY_ROUTES = ("workbuddy", "workbuddy-ai", "workbuddy-global")
-# A Harness turn routed to the OpenCode Go pool is OpenCode usage, so it is
-# counted on the OpenCode card and kept off the DSH card.
 OPENCODE_ROUTES = ("opencode-go",)
-DSH_EXCLUDE_ROUTES = WORKBUDDY_ROUTES + OPENCODE_ROUTES
 
 
 @dataclass
@@ -63,6 +56,7 @@ class TokenReading:
     month_tokens: int = 0
     month_cost_usd: float | None = None
     month_since: str = ""
+    quota_sources: tuple[str, ...] = ()
 
     @property
     def window_total(self) -> int:
@@ -329,9 +323,7 @@ def _opencode_event(stamp, data):
     return (stamp, total, cost, name, parts)
 
 
-def _opencode(now: float, extra_events=None) -> TokenReading:
-    if extra_events is None:
-        extra_events = [(ts, tok) for ts, tok in harness_by_route(now)["opencode"]]
+def _opencode(now: float) -> TokenReading:
     cutoff_ms = int((_start_of_today(now) - 32 * 86400) * 1000)
     events: list[tuple[float, int, float | None]] = []
     source = ""
@@ -385,11 +377,6 @@ def _opencode(now: float, extra_events=None) -> TokenReading:
             if events:
                 source = "storage/message"
                 break
-    if extra_events:
-        # Turns Harness routed to the OpenCode Go pool are OpenCode usage too,
-        # and they are not in this client's own database.
-        events = events + list(extra_events)
-        source = (source or "opencode.db") + " + Harness"
     return _bucketize(events, now, "USD" if events else None,
                       source or "opencode.db", "opencode")
 
@@ -419,7 +406,8 @@ def _harness_homes() -> list[Path]:
 def _harness_usage(usage: dict) -> int:
     def number(key):
         value = usage.get(key)
-        return int(value) if isinstance(value, (int, float)) else 0
+        return (int(value) if isinstance(value, (int, float))
+                and math.isfinite(value) and value >= 0 else 0)
     return (number("inputTokens") + number("outputTokens")
             + number("cacheWriteTokens") + number("cacheReadTokens"))
 
@@ -428,8 +416,6 @@ def _harness_events(prefixes: tuple[str, ...] = (),
                     exclude: tuple[str, ...] = ()) -> tuple[list, str]:
     """Assistant turns of one route, read out of the Harness session logs."""
     reader_factory = _zstd_reader()
-    if reader_factory is None:
-        return [], ""
     events, files = [], 0
     for home in _harness_homes():
         pattern = os.path.join(str(home), "sessions", "**", "session*.jsonl*")
@@ -439,6 +425,8 @@ def _harness_events(prefixes: tuple[str, ...] = (),
             files += 1
             try:
                 if path.endswith(".zstd"):
+                    if reader_factory is None:
+                        continue
                     with open(path, "rb") as raw:
                         stream = reader_factory(raw)
                         lines = _iter_lines(stream)
@@ -466,15 +454,20 @@ def _harness_scan(lines, prefixes: tuple[str, ...] = (),
             record = json.loads(line)
         except Exception:
             continue
-        if record.get("type") != "assistant/message":
+        if not isinstance(record, dict) or record.get("type") != "assistant/message":
             continue
         data = record.get("data") or {}
-        provider = (((data.get("message") or {}).get("source") or {})
-                    .get("provider") or "")
-        tokens = _harness_usage(data.get("usage") or {})
+        if not isinstance(data, dict):
+            continue
+        message = data.get("message")
+        source = message.get("source") if isinstance(message, dict) else None
+        provider = source.get("provider") if isinstance(source, dict) else ""
+        provider = provider if isinstance(provider, str) else ""
+        usage = data.get("usage")
+        tokens = _harness_usage(usage) if isinstance(usage, dict) else 0
         stamp = record.get("time")
-        if tokens and isinstance(stamp, (int, float)):
-            # the route travels with the event, so the caller can split by card
+        if tokens > 0 and isinstance(stamp, (int, float)) and math.isfinite(stamp):
+            # Keep billing-source evidence separate from the execution client.
             out.append((float(stamp) / 1000.0, tokens, provider))
     return out
 
@@ -485,8 +478,8 @@ def harness_by_route(now: float | None = None) -> dict[str, list]:
     """Scan the Harness session logs once and split the turns by provider.
 
     Returns {"workbuddy": [(ts, tokens)], "opencode": [...], "dsh": [...]},
-    so the three cards agree and no turn lands on two of them. The result is
-    cached until a session log actually changes on disk.
+    for billing-source labels. Every returned turn still belongs to DSH.
+    The result is cached until a session log actually changes on disk.
     """
     now = now if now is not None else time.time()
     stamp_key = tuple(sorted(
@@ -508,13 +501,7 @@ def harness_by_route(now: float | None = None) -> dict[str, list]:
     return split
 
 def _workbuddy(now: float) -> TokenReading:
-    events = [(ts, tok) for ts, tok in harness_by_route(now)["workbuddy"]]
-    extra = _workbuddy_local()
-    source = "Harness sessions"
-    if extra:
-        events += extra
-        source += " + local logs"
-    return _bucketize(events, now, None, source, "workbuddy")
+    return _bucketize(_workbuddy_local(), now, None, "WorkBuddy local logs", "workbuddy")
 
 
 def _workbuddy_local() -> list:
@@ -586,22 +573,21 @@ def _transcript_usage(record: dict):
 
 def _dsh(now: float) -> TokenReading:
     split = harness_by_route(now)
-    events = [(ts, tok) for ts, tok in split["dsh"]]
+    events = [event for route in split.values() for event in route]
     reading = _bucketize(events, now, None, "Harness sessions", "dsh")
+    reading.quota_sources = tuple(name for route, name in (
+        ("workbuddy", "WorkBuddy"), ("opencode", "OpenCode Go"))
+        if any(now - WINDOW_SECONDS <= ts <= now for ts, _tok in split[route]))
+    if reading.quota_sources:
+        # A route name proves the service, not which of its accounts paid.
+        reading.notice = ("近24h额度来源：%s；额度账户未关联，余量暂不可确认"
+                          % " / ".join(reading.quota_sources))
 
-    # The whale widget keeps the HOST's day: every request the Harness served,
-    # whichever product's endpoint it went to. Its total is therefore the only
-    # place the day's real figure exists - the session logs only carry the
-    # DeepSeek-native routes, which can be empty for a whole day - so the day is
-    # taken from the ledger and the turns already counted on the WorkBuddy and
-    # OpenCode cards are subtracted from it, leaving DSH its own share.
+    # Both records describe the same execution client; never add them together.
     cost, currency, whale_tokens = _whale_today()
     if whale_tokens:
-        claimed = 0
-        for route in ("workbuddy", "opencode"):
-            claimed += sum(tok for ts, tok in split[route] if _is_today(ts, now))
-        reading.today = max(0, int(whale_tokens) - int(claimed))
-        reading.source = "whale ledger - other routes"
+        reading.today = max(reading.today, int(whale_tokens))
+        reading.source = "Harness sessions + whale ledger"
     if cost:
         reading.today_cost = cost
         reading.cost_currency = currency

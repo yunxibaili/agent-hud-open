@@ -456,7 +456,8 @@ class AgentCard(QWidget):
         footer_lines: list[tuple[str, QColor]] = []
         primary = []
         if report.balance:
-            primary.append("可用余额 %s" % report.balance)
+            primary.append(("DeepSeek 账户余额 %s" if report.pid == "dsh"
+                            else "可用余额 %s") % report.balance)
         # The ledger is the same record the histogram is drawn from, so the
         # number and the bars can never disagree.
         today = getattr(reading, "today", None)
@@ -484,6 +485,8 @@ class AgentCard(QWidget):
                 break
         for text, color in footer_lines:
             outer.addWidget(WordLabel(text, inner_width, color, 9.0, 2))
+        if report.quota_note:
+            outer.addWidget(WordLabel(report.quota_note, inner_width, T.ACCENT_NOTE, 9.0, 3))
         outer.addStretch(0)
         self.outer = outer
         # A card is never compressed: if the panel runs out of room it scrolls,

@@ -239,6 +239,9 @@ def peek_segments(report: model.ProviderReport, warn: float, crit: float,
     """One agent, one line: its name and each window as "5h 100% (1h 34m)"."""
     name_segment = Segment(report.name, T.title(11.5, QFont.DemiBold), T.TEXT)
     segments = [name_segment]
+    if report.quota_note:
+        segments.append(Segment(report.quota_note, T.ui(10.0), T.ACCENT_NOTE))
+        return segments
     if not report.ok and report.note:
         segments.append(Segment(report.note, T.ui(10.0), T.ACCENT_NOTE))
         return segments
@@ -258,7 +261,8 @@ def peek_segments(report: model.ProviderReport, warn: float, crit: float,
         segments.append(Segment(value, T.numeric(10.5, QFont.DemiBold), color))
     if not report.windows:
         if report.raw_balance is not None:
-            segments.append(Segment("余额", T.ui(10.5), T.TEXT_DIM))
+            segments.append(Segment("DeepSeek余额" if report.pid == "dsh" else "余额",
+                                    T.ui(10.5), T.TEXT_DIM))
             import money
             segments.append(Segment(money.compact(report.raw_balance,
                                                   report.balance_currency),

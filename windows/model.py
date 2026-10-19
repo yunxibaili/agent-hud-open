@@ -141,6 +141,7 @@ class ProviderReport:
         return "ok" if self.balance else "idle"
 
     raw_balance: float | None = None
+    quota_note: str | None = None
 
 
 def balance_level(currency: str, amount: float | None) -> str:

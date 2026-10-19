@@ -64,7 +64,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -411,6 +411,14 @@ class HudWindow(QWidget):
             if report is None:
                 name, mark = providers.META[pid]
                 report = model.ProviderReport(pid=pid, name=name, mark=mark)
+            reading = (self.readings or {}).get(pid)
+            if pid == "dsh" and reading is not None and reading.quota_sources:
+                # Do not present DeepSeek's balance as a different service's quota.
+                report = replace(report, balance=None, raw_balance=None,
+                                 balance_currency=None, windows=[], plan=None,
+                                 today_tokens=reading.today, today_cost=reading.today_cost,
+                                 ok=bool(reading.events), note=None, details=[],
+                                 quota_note=reading.notice)
             out.append(report)
         return out
 

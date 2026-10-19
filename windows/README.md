@@ -5,6 +5,12 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个贴边停靠的桌面悬浮 HUD。目前注册 16 种工具；额度、余额和本地会话用量的支持因客户端而异，具体见版本与移植状态说明。
 
+### Windows v0.1.11 · 2026-10-19
+
+- 区分执行客户端与额度来源：DSH 经 WorkBuddy 或 OpenCode Go 发出的请求仍归入 DSH，后两者只统计各自客户端的本地用量。汇总、月度及统计沿用同一份快照，不再通过跨卡片转移请求来表示计费来源。
+- DSH 卡片及悬停提示列出近 24 小时日志确认的外部额度来源；不把历史路由视为当前配置，也不把 DeepSeek 余额或另一个客户端账户的额度套用到这些请求。账户关联尚未核验时明确提示余量无法确认；不会为此增加额度接口调用。
+- 普通 JSONL 会话不再依赖可选 zstd 解码器；压缩记录仍需要原有解码器。复用上游 [usage-semantics.md](https://github.com/jazzenchen/agent-hud-open/blob/bf19ac98da11fe0f5967f5a124d42f0da4bf2cf9/docs/usage-semantics.md) 中执行客户端、计费池及账户独立的语义，不新增依赖。
+
 ### Windows v0.1.10 · 2026-10-19
 
 - 顶部停靠栏只显示检测到实际进程的 Agent，不再以安装目录或历史日志代替运行状态。每 10 秒在后台读取当前 Windows 会话的进程快照，排除 HUD 自身及其查询子进程；未识别或检测失败时不把历史工具当作运行中。
