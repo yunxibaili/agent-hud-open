@@ -131,3 +131,5 @@ class UsageWindow(QWidget):
             "费用仅含来源已记录的美元计价（覆盖 %.0f%% Token）；— 表示未知，不等于免费。"
             % ("%d 分钟" % minutes if minutes < 60 else "%d 小时" % (minutes // 60),
                priced * 100 / total if total else 0))
+        if any(getattr(reading, "notice", "") for reading in readings.values()):
+            self.note.setText(self.note.text() + "\n部分来源读取不完整，当前数字可能偏低。")

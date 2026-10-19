@@ -52,6 +52,13 @@ DEFAULTS = {
             "tokens": {},           # manual fallback, see docs/README.windows.md
         },
         "dsh": {"enabled": True, "homes": []},
+        "claude": {"enabled": True},
+        "codebuddy": {"enabled": True},
+        "pi": {"enabled": True},
+        "kimi": {"enabled": True},
+        "qwen": {"enabled": True},
+        "openclaw": {"enabled": True},
+        "devin": {"enabled": True},
     },
     "currency": {
         "usd_cny": 7.14,         # CNY per 1 USD; every cost is shown in dollars

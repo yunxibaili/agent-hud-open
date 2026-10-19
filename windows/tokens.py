@@ -58,6 +58,7 @@ class TokenReading:
     source: str = ""
     events: int = 0
     ranges: dict = field(default_factory=dict)
+    notice: str = ""
 
     @property
     def window_total(self) -> int:
@@ -455,8 +456,7 @@ def _workbuddy(now: float) -> TokenReading:
 def _workbuddy_local() -> list:
     """WorkBuddy / CodeBuddy transcript usage, where those clients keep it."""
     out = []
-    roots = [userprofile() / ".workbuddy", userprofile() / ".codebuddy",
-             appdata() / "WorkBuddy", localappdata() / "CodeBuddyExtension"]
+    roots = [userprofile() / ".workbuddy", appdata() / "WorkBuddy"]
     seen = set()
     for root in roots:
         if not root.exists():
@@ -729,8 +729,12 @@ def collect(now: float | None = None, force: bool = False) -> dict[str, TokenRea
         if fresh:
             return _cache["data"]
     readings: dict[str, TokenReading] = {}
-    for pid in ("codex", "opencode", "workbuddy", "dsh", "antigravity"):
+    import local_usage
+    import providers
+    for pid in providers.ORDER:
         source = _SOURCES.get(pid)
+        if pid in local_usage.LOCAL_PROVIDERS:
+            source = lambda stamp, current=pid: local_usage.collect(current, stamp)
         if source is None:
             readings[pid] = _blank(pid)          # no local ledger for this one
             continue

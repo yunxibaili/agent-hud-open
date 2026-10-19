@@ -3,7 +3,15 @@
 <img src="assets/agent-hud-icon-v1.png" width="112" alt="Agent HUD 可爱助手图标">
 
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
-一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
+一个贴边停靠的桌面悬浮 HUD。目前注册 12 种工具：原有 5 种额度接入、6 种本地会话用量接入，以及 Devin CLI 的缓存额度；各工具实际能力见版本说明。
+
+### Windows v0.1.7 · 2026-10-19
+
+- 新增 Claude Code、CodeBuddy、Pi、Kimi、Qwen Code、OpenClaw 的本地 Token 读取，自动发现已有会话目录；接入卡片、趋势、全部 Agent 汇总和多时段统计。不读取凭据，不发起推理或新的网络请求；这些新增接入尚无在线额度接口。
+- 按上游字段处理请求去重、继承历史、缓存 Token、Qwen 分支和 OpenClaw 镜像排除；源码仅保留计数、模型和内部去重键，不保留提示词。大于 64 MiB、损坏或不可读的文件跳过并提示统计不完整。
+- CodeBuddy 从 WorkBuddy 本地日志统计中分离，避免独立卡片上线后重复计数。复用现有扫描器和文件缓存，没有新数据库、服务或依赖。
+- 新增 Devin CLI 每日/每周缓存额度，按上游 [DevinQuota.swift](https://github.com/jazzenchen/agent-hud-open/blob/bf19ac98da11fe0f5967f5a124d42f0da4bf2cf9/Sources/AgentHUDCore/Providers/Devin/DevinQuota.swift) 解码；仅展示订阅字段，不展示缓存中的账户身份。刷新仍由 CLI 自身完成；目前未读取 Devin 会话用量。
+- 本地读取参照同版本的 `OpenAgentSessions.swift`、`QwenSessions.swift`、`TencentBuddySessions.swift` 和 `OpenClawSessions.swift`；沿用项目与第三方许可声明。未安装客户端时自动隐藏对应停靠项。
 
 ### Windows v0.1.6 · 2026-10-19
 
@@ -21,7 +29,7 @@
 | --- | --- |
 | 停靠、悬停、额度、提前耗尽预警 | 已实现，保留本机单实例与隐私设置 |
 | 5h / 24h / 7d / 30d、按 Agent 查看 | v0.1.6 已实现；取决于客户端仍保留的历史 |
-| 18 种 Agent 的全量接入 | 目前 5 种，继续适配各自数据源 |
+| 18 种 Agent 的全量接入 | 注册 12 种；其中 6 种新增本地用量、Devin 仅缓存额度，尚未全量覆盖 |
 | 按模型、Token 类型、缓存命中率、热图 | 待移植 |
 | 会话、轮次、调用与回到会话 | 待移植 |
 | 精确工作/等待状态、回复提醒 | 当前仅有 Token 活动推断，待接入真实生命周期 |

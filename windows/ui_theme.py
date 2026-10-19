@@ -51,6 +51,13 @@ AGENT_COLORS = {
     "antigravity": QColor("#5B8DEF"),
     "workbuddy": QColor("#07C160"),
     "dsh": QColor("#5B7CFA"),
+    "claude": QColor("#D97757"),
+    "codebuddy": QColor("#4DBED3"),
+    "pi": QColor("#E5C07B"),
+    "kimi": QColor("#5A8EFF"),
+    "qwen": QColor("#8B7AF4"),
+    "openclaw": QColor("#FF6B6B"),
+    "devin": QColor("#84C2F4"),
 }
 
 
@@ -150,6 +157,12 @@ ARTWORK = {
     "antigravity": ("antigravity", None),
     "workbuddy": ("workbuddy", None),
     "dsh": ("deepseek", None),
+    "claude": ("claude", None),
+    "codebuddy": ("codebuddy", None),
+    "pi": ("pi", None),
+    "kimi": ("kimi", None),
+    "qwen": ("qwen", None),
+    "openclaw": ("openclaw", None),
 }
 
 # Vendors whose mark is a different size inside its own canvas.

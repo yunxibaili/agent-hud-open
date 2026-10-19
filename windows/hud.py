@@ -62,7 +62,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
