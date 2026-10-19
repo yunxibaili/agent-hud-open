@@ -5,6 +5,11 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个贴边停靠的桌面悬浮 HUD。目前注册 16 种工具；额度、余额和本地会话用量的支持因客户端而异，具体见版本与移植状态说明。
 
+### Windows v0.1.12 · 2026-10-19
+
+- 按用户使用习惯，检测到 DSH 运行时，默认保留 WorkBuddy 停靠项及额度卡片，即使 WorkBuddy 客户端没有运行。DSH 退出后恢复按实际进程筛选；WorkBuddy 自己仍运行时继续显示，显式禁用的提供方仍保持禁用。
+- 该项是关联额度入口，不代表检测到 WorkBuddy 进程或已确认它与 DSH 使用同一账户；沿用现有额度读取和客户端用量归属，不增加查询，也不复制 DSH 请求到 WorkBuddy。
+
 ### Windows v0.1.11 · 2026-10-19
 
 - 区分执行客户端与额度来源：DSH 经 WorkBuddy 或 OpenCode Go 发出的请求仍归入 DSH，后两者只统计各自客户端的本地用量。汇总、月度及统计沿用同一份快照，不再通过跨卡片转移请求来表示计费来源。
