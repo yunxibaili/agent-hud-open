@@ -239,8 +239,12 @@ class DockBar(QWidget):
         if active is not None:
             self.active = dict(active)
 
+        metrics = QFontMetrics(self.text_font)
         seen = []
         for index, report in enumerate(self.reports):
+            # Keep units visible; retaining the widest value avoids refresh jitter.
+            self.text_width = max(self.text_width,
+                                  metrics.horizontalAdvance(self.remaining_text(report)) + 2)
             pid = report.pid
             seen.append(pid)
             slot = self.slots.get(pid)
