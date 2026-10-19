@@ -155,6 +155,9 @@ class LinePill(QWidget):
         screen = self.screen()
         if screen is not None:
             width = min(width, screen.availableGeometry().width() - 24)
+        parent = self.parentWidget()
+        if parent is not None:
+            width = min(width, max(150, parent.contentsRect().width() - 16))
         return int(round(width))
 
     def painted_width(self) -> float:
@@ -203,7 +206,7 @@ class LinePill(QWidget):
 
         painter.save()
         painter.setClipPath(path)
-        painter.setOpacity(max(0.0, min(1.0, self.text_alpha)))
+        painter.setOpacity(appear * max(0.0, min(1.0, self.text_alpha)))
         x = rect.left() + self.pad
         available = rect.width() - 2 * self.pad
         for index, segment in enumerate(self.segments):

@@ -28,6 +28,7 @@ import queue
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -60,6 +61,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
+VERSION = "0.1.1"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -131,10 +133,13 @@ class Poller(threading.Thread):
                                               mark=providers.META[self.pid][1],
                                               note="刷新异常: %s" % exc)
             try:
+                if self.stop.is_set():
+                    return
                 self.out.put(report)
             except Exception:
                 return
-            interval = max(15.0, float(self.cfg.get("refresh_seconds", 120)))
+            key = "refresh_seconds" if report.ok else "retry_seconds"
+            interval = max(15.0, float(self.cfg.get(key, 120 if report.ok else 30)))
             deadline = time.time() + interval
             while not self.stop.is_set() and time.time() < deadline:
                 self.stop.wait(0.2)
@@ -199,18 +204,19 @@ class HudWindow(QWidget):
 
         self.content = QWidget(self)
         self.content.setAttribute(Qt.WA_TranslucentBackground, True)
-
-        self.shadow = QGraphicsDropShadowEffect(self)
-        self.shadow.setBlurRadius(26)
-        self.shadow.setOffset(0, 6)
-        self.shadow.setColor(QColor(0, 0, 0, 150))
-        self.content.setGraphicsEffect(self.shadow)
+        self.content.setContentsMargins(SHADOW, SHADOW, SHADOW, SHADOW)
 
         self.dock = DockBar(marks, self.content)
         self.peek_pill = LinePill(int(DOCK_HEIGHT), self.content)
         self.reminder = LinePill(int(DOCK_HEIGHT), self.content)
         self.reminder.background = QColor(0x1B, 0x1C, 0x22, 0xF2)
         self.panel = Panel(marks, PANEL_WIDTH, self.content)
+        for widget in (self.dock, self.peek_pill, self.reminder, self.panel):
+            shadow = QGraphicsDropShadowEffect(widget)
+            shadow.setBlurRadius(26)
+            shadow.setOffset(0, 6)
+            shadow.setColor(QColor(0, 0, 0, 150))
+            widget.setGraphicsEffect(shadow)
         self.peek_pill.hide()
         self.reminder.hide()
         self.panel.hide()
@@ -310,7 +316,6 @@ class HudWindow(QWidget):
             self.dock.setGeometry(strip.translated(-origin))
             anchor = QRect(strip)
             keep = QRegion(strip)
-            mask = QRegion(strip.adjusted(-SHADOW, -SHADOW, SHADOW, SHADOW))
             side_y = strip.center().y()
             if not edge.is_horizontal:
                 widgets = [w for w in (self.reminder, self.peek_pill, self.panel)
@@ -346,14 +351,18 @@ class HudWindow(QWidget):
                                                     frame.bottom() + 1 - target.height())))
                 widget.setGeometry(target.translated(-origin))
                 keep |= QRegion(target.adjusted(-GAP, -GAP, GAP, GAP))
-                mask |= QRegion(target.adjusted(-SHADOW, -SHADOW, SHADOW, SHADOW))
                 anchor = target
             self._keep_region = keep
-            # A transparent reserve must not intercept the desktop underneath it.
-            self.setMask(mask.translated(-origin))
+            self.update()
         finally:
             self._placing = False
         set_click_through(int(self.winId()), not self.revealed)
+
+    def paintEvent(self, event) -> None:
+        # Clear old child bounds too; alpha-zero pixels also pass clicks through on Windows.
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(event.rect(), Qt.transparent)
 
     def _tuck_changed(self) -> None:
         signs = {geo.Edge.TOP: QPoint(0, -1), geo.Edge.BOTTOM: QPoint(0, 1),
@@ -474,8 +483,11 @@ class HudWindow(QWidget):
             if focused:
                 best = None
                 for window in report.windows:
+                    if window.used_percent is None or window.used_percent >= 99.5:
+                        continue
                     estimate = self.history.burn(report.pid, window.key)
-                    if not estimate or estimate.get("hours_to_empty") is None:
+                    if (not estimate or estimate.get("hours_to_empty") is None
+                            or estimate.get("pct_per_hour", 0) < 0.1):
                         continue
                     if best is None or estimate["hours_to_empty"] < best[0]:
                         best = (estimate["hours_to_empty"], estimate, window)
@@ -568,6 +580,8 @@ class HudWindow(QWidget):
     def _audit(self, reports) -> None:
         """Quota alerts, resets and finished sessions, one pill at a time."""
         for report in reports:
+            if not report.ok:
+                continue
             for window in report.windows:
                 if window.used_percent is None:
                     continue
@@ -631,8 +645,13 @@ class HudWindow(QWidget):
                 report = self.queue.get_nowait()
             except queue.Empty:
                 break
+            previous = self.reports.get(report.pid)
+            if (not report.ok and report.available and previous is not None
+                    and previous.updated_at and (previous.windows or previous.raw_balance is not None)):
+                report = replace(previous, ok=False,
+                                 note="读取失败，保留上次成功数据 · %s" % (report.note or "稍后重试"))
             self.reports[report.pid] = report
-            resets = self.history.observe(report)
+            resets = self.history.observe(report) if report.ok else []
             self.history.save_throttled()
             log("%s ok=%s windows=%d note=%s" % (report.pid, report.ok,
                                                  len(report.windows), report.note or ""))
@@ -865,9 +884,7 @@ class HudWindow(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event):
-        self.history.save()
-        self.stop_event.set()
-        self.poller_stop.set()
+        self.quit()
         event.accept()
 
     # -- settings -----------------------------------------------------------
@@ -954,22 +971,20 @@ def main(argv=None) -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Agent HUD")
+    app.setApplicationVersion(VERSION)
     app.setQuitOnLastWindowClosed(False)
     motion.detect_reduced()
 
     families = T.resolve_fonts()
     config.ensure_file()
     cfg = config.load()
-    log("started (dock=%s/%s, fonts: %s)"
-        % ((cfg.get("dock", {}) or {}).get("mode", "dock"),
+    log("started v%s (dock=%s/%s, fonts: %s)"
+        % (VERSION, (cfg.get("dock", {}) or {}).get("mode", "dock"),
            (cfg.get("dock", {}) or {}).get("edge", "top"), families))
 
     marks = T.Marks()
     hud = HudWindow(cfg, marks)
     if args.expand:
-        # Screenshot mode exposes a regular, pinned window to desktop capture tools.
-        hud.setWindowFlag(Qt.Tool, False)
-        hud.setWindowFlag(Qt.Window, True)
         hud._set_sticky(True)
         hud.revealed = True
         hud.hover_timer.setInterval(HOVER_FAST_MS)

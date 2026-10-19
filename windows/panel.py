@@ -403,8 +403,7 @@ class AgentCard(QWidget):
         dot.setFont(T.ui(8.0))
         dot.setStyleSheet("color: %s;" % T.color_for(level).name())
         header.addWidget(dot)
-        right = report.account or ("已连接" if report.ok else "未连接")
-        header.addWidget(ElidedLabel(str(right), T.TEXT_DIM, 9.0), 0)
+        header.addWidget(ElidedLabel("已连接" if report.ok else "读取失败", T.TEXT_DIM, 9.0), 0)
         outer.addLayout(header)
 
         if report.windows:
@@ -440,7 +439,7 @@ class AgentCard(QWidget):
                 hours_left = max(0.0, (burn_window.reset_at - time.time()) / 3600.0)
             if hours_left is None or burn["hours_to_empty"] < hours_left:
                 outer.addWidget(WordLabel(
-                    "按当前速度，%s 额度约 %s 后耗尽（%.0f%%/小时）"
+                    "按当前速度，%s 额度约 %s 后耗尽（%.1f%%/小时）"
                     % (burn_window.short, T.hours_text(burn["hours_to_empty"]),
                        burn["pct_per_hour"]),
                     inner_width, T.CRITICAL if hours_left and
@@ -767,7 +766,7 @@ class MonthCard(QWidget):
         painter.setPen(QColor(T.TEXT))
         painter.drawText(QRect(16, 10, self.width() - 32, 20),
                          int(Qt.AlignLeft | Qt.AlignVCenter),
-                         "本月（全部 harness）")
+                         "本月（全部 Agent）")
         painter.setFont(T.ui(10.0))
         painter.setPen(QColor(T.TEXT_DIM))
         painter.drawText(QRect(16, 10, self.width() - 32, 20),
@@ -847,6 +846,7 @@ class Panel(QWidget):
         self.outer = QVBoxLayout(self)
         self.outer.setContentsMargins(13, 11, 13, 13)
         self.outer.setSpacing(8)
+        self.outer.setAlignment(Qt.AlignTop)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -876,7 +876,7 @@ class Panel(QWidget):
             item = self.cards_box.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                widget.hide()
                 widget.deleteLater()
         self.ghost.release()
         card = MonthCard(totals, self)
@@ -892,7 +892,7 @@ class Panel(QWidget):
             item = self.cards_box.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                widget.hide()
                 widget.deleteLater()
         self.cards = []
         self.totals_card = None

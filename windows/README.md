@@ -3,12 +3,14 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
 
-### 2026-10-19 恢复修复
+### Windows v0.1.1 · 2026-10-19
 
 - 恢复「月」按钮、独立月度页面和图标旁的美元估算；复用 `tokens.py` 的后台统计，扫描不占用界面线程。
 - 修正恢复版与当前悬停、停靠及卡片接口的不兼容；切换月页面时清除已删除卡片的引用。
-- 顶层透明窗口在同一屏幕和停靠方向下保留尺寸，仅改变内部面板大小；按 [Qt QWidget 文档](https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QWidget.html#PySide6.QtWidgets.QWidget.setMask) 设置可见区域遮罩，透明预留区域不拦截桌面点击。
-- `python hud.py --expand` 打开固定面板供界面观察；正常启动仍使用不占任务栏的工具窗口。
+- 顶层透明窗口在同一屏幕和停靠方向下保留尺寸，仅改变内部面板大小；重绘时清理透明背景，各面板独立绘制阴影。按 [Windows 分层窗口规则](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#layered-windows)，完全透明区域让鼠标点击穿过，无需在动画中反复改变原生窗口遮罩。
+- 长提示按 HUD 可用宽度截断；切换页面时隐藏旧卡片并延迟销毁。额度读取失败时保留上次有效值并标记错误，按 `retry_seconds` 重试。
+- 账户位置只显示连接状态，不显示邮箱或账户标识。
+- 所有 GUI 启动方式均使用不占任务栏的工具窗口，仅保留系统托盘；`python hud.py --expand` 只负责展开并固定面板。
 - 本地 `config.json`、用量历史、日志、个人头像、截图和恢复残片不提交到仓库。
 
 这是对关键功能的重建，不代表所有历史补丁逐条恢复。文档下方原有动效说明仅供参考，以当前源码为准。
