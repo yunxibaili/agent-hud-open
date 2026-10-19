@@ -465,7 +465,8 @@ class AgentCard(QWidget):
             today = report.today_tokens
         if today is not None:
             piece = "今日 %s tokens" % model.human_tokens(today)
-            cost = getattr(reading, "today_cost", None) or report.today_cost
+            cost = (getattr(reading, "today_cost", None) if reading is not None
+                    else report.today_cost)
             currency = getattr(reading, "cost_currency", None) or "USD"
             if cost:
                 # one currency everywhere, at the configured rate
@@ -487,6 +488,28 @@ class AgentCard(QWidget):
             outer.addWidget(WordLabel(text, inner_width, color, 9.0, 2))
         if report.quota_note:
             outer.addWidget(WordLabel(report.quota_note, inner_width, T.ACCENT_NOTE, 9.0, 3))
+        if report.pid == "dsh" and getattr(reading, "today_cost", None) is not None:
+            outer.addWidget(WordLabel("费用仅含可计价记录 · 官方 API 已按峰谷价估算",
+                                      inner_width, T.TEXT_DIM, 9.0, 2))
+        models = getattr(reading, "ranges", {}).get("24h", {}).get("models", {})
+        if models:
+            outer.addWidget(WordLabel("模型用量 · 过去24小时（Token / USD）", inner_width, T.TEXT_DIM, 9.0))
+            for name, usage in sorted(models.items(), key=lambda item: -item[1]["tokens"]):
+                row = QHBoxLayout()
+                label = WordLabel("未记录模型" if name == "Unknown" else name,
+                                  inner_width - 176, T.TEXT_DIM, 9.0, 1)
+                label.setTextFormat(Qt.PlainText)
+                label.setToolTip(name)
+                row.addWidget(label)
+                cost = usage["cost_usd"]
+                figure = QLabel("%s · %s" % (model.human_tokens(usage["tokens"]),
+                                money.usd(cost) if cost is not None else "—"))
+                figure.setFont(T.numeric(8.5))
+                figure.setToolTip("%s tokens" % format(usage["tokens"], ","))
+                figure.setStyleSheet("color: %s;" % T.TEXT.name())
+                figure.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                row.addWidget(figure, 1)
+                outer.addLayout(row)
         outer.addStretch(0)
         self.outer = outer
         # A card is never compressed: if the panel runs out of room it scrolls,

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import providers.codex as codex_provider
+import money
 from winx import appdata, localappdata, userprofile
 
 BUCKET_MINUTES = 15
@@ -447,28 +448,61 @@ def _iter_lines(stream):
 def _harness_scan(lines, prefixes: tuple[str, ...] = (),
                   exclude: tuple[str, ...] = ()):
     out = []
+    requested_at = None
+    provider = ""
+    model_name = "Unknown"
     for line in lines:
-        if '"assistant/message"' not in line:
+        if not any(kind in line for kind in ('"assistant/message"', '"request/header"',
+                                              '"request/context"', '"step/start"')):
             continue
         try:
             record = json.loads(line)
         except Exception:
             continue
-        if not isinstance(record, dict) or record.get("type") != "assistant/message":
+        if not isinstance(record, dict):
             continue
         data = record.get("data") or {}
         if not isinstance(data, dict):
             continue
+        kind = record.get("type")
+        stamp = record.get("time")
+        if not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+            continue
+        stamp = float(stamp) / 1000.0
+        if kind == "step/start":
+            requested_at = stamp
+            continue
+        if kind in ("request/header", "request/context"):
+            header = data.get("header")
+            config = header.get("config") if isinstance(header, dict) else None
+            config = config if kind == "request/header" and isinstance(config, dict) else data
+            if isinstance(config.get("provider"), str):
+                provider = config["provider"]
+            if isinstance(config.get("model"), str):
+                model_name = config["model"] or "Unknown"
+            # A request that crosses a tariff boundary uses its start, not its finish.
+            requested_at = stamp
+            continue
+        if kind != "assistant/message":
+            continue
         message = data.get("message")
         source = message.get("source") if isinstance(message, dict) else None
-        provider = source.get("provider") if isinstance(source, dict) else ""
-        provider = provider if isinstance(provider, str) else ""
+        route = source.get("provider") if isinstance(source, dict) else None
+        route = route if isinstance(route, str) else provider
+        name = source.get("model") if isinstance(source, dict) else None
+        name = name if isinstance(name, str) and name else model_name
         usage = data.get("usage")
         tokens = _harness_usage(usage) if isinstance(usage, dict) else 0
-        stamp = record.get("time")
-        if tokens > 0 and isinstance(stamp, (int, float)) and math.isfinite(stamp):
-            # Keep billing-source evidence separate from the execution client.
-            out.append((float(stamp) / 1000.0, tokens, provider))
+        if tokens > 0:
+            fields = {"input": "inputTokens", "output": "outputTokens",
+                      "cache_read": "cacheReadTokens", "cache_write": "cacheWriteTokens"}
+            # Missing cache counters are unknown, not evidence of zero cache usage.
+            parts = {key: usage[field] for key, field in fields.items()
+                     if isinstance(usage.get(field), int) and usage[field] >= 0}
+            cost = (money.deepseek_cost(name, parts, requested_at)
+                    if route == "deepseek-official" and requested_at is not None else None)
+            out.append((stamp, tokens, cost, name, parts, route))
+        requested_at = None
     return out
 
 
@@ -477,7 +511,7 @@ _harness_cache: dict = {}
 def harness_by_route(now: float | None = None) -> dict[str, list]:
     """Scan the Harness session logs once and split the turns by provider.
 
-    Returns {"workbuddy": [(ts, tokens)], "opencode": [...], "dsh": [...]},
+    Returns {"workbuddy": [usage_event], "opencode": [...], "dsh": [...]},
     for billing-source labels. Every returned turn still belongs to DSH.
     The result is cached until a session log actually changes on disk.
     """
@@ -489,13 +523,14 @@ def harness_by_route(now: float | None = None) -> dict[str, list]:
         return _harness_cache["split"]
     all_events, source = _harness_events()
     split: dict[str, list] = {"workbuddy": [], "opencode": [], "dsh": []}
-    for stamp, tokens, provider in all_events:
+    for event in all_events:
+        provider = event[5]
         if provider.startswith(WORKBUDDY_ROUTES):
-            split["workbuddy"].append((stamp, tokens))
+            split["workbuddy"].append(event[:5])
         elif provider.startswith(OPENCODE_ROUTES):
-            split["opencode"].append((stamp, tokens))
+            split["opencode"].append(event[:5])
         else:
-            split["dsh"].append((stamp, tokens))
+            split["dsh"].append(event[:5])
     _harness_cache["key"] = stamp_key
     _harness_cache["split"] = split
     return split
@@ -573,24 +608,22 @@ def _transcript_usage(record: dict):
 
 def _dsh(now: float) -> TokenReading:
     split = harness_by_route(now)
-    events = [event for route in split.values() for event in route]
-    reading = _bucketize(events, now, None, "Harness sessions", "dsh")
+    events = [(ts, count, money.to_usd(cost, "CNY"), name, parts)
+              for route in split.values() for ts, count, cost, name, parts in route]
+    reading = _bucketize(events, now, "USD", "Harness sessions", "dsh")
     reading.quota_sources = tuple(name for route, name in (
         ("workbuddy", "WorkBuddy"), ("opencode", "OpenCode Go"))
-        if any(now - WINDOW_SECONDS <= ts <= now for ts, _tok in split[route]))
+        if any(now - WINDOW_SECONDS <= event[0] <= now for event in split[route]))
     if reading.quota_sources:
         # A route name proves the service, not which of its accounts paid.
         reading.notice = ("近24h额度来源：%s；额度账户未关联，余量暂不可确认"
                           % " / ".join(reading.quota_sources))
 
     # Both records describe the same execution client; never add them together.
-    cost, currency, whale_tokens = _whale_today()
+    _cost, _currency, whale_tokens = _whale_today()
     if whale_tokens:
         reading.today = max(reading.today, int(whale_tokens))
         reading.source = "Harness sessions + whale ledger"
-    if cost:
-        reading.today_cost = cost
-        reading.cost_currency = currency
     return reading
 
 
@@ -703,8 +736,6 @@ def refresh_month(now: float | None = None) -> dict | None:
 
 def month_totals(now: float | None = None) -> dict:
     """Calendar totals from the same scanner snapshot as the statistics view."""
-    import money
-
     now = now if now is not None else time.time()
     start = _start_of_month(now)
     since = datetime.datetime.fromtimestamp(start).date().isoformat()
@@ -712,11 +743,6 @@ def month_totals(now: float | None = None) -> dict:
     current = {pid: reading for pid, reading in readings.items() if reading.month_since == since}
     by_agent = {pid: reading.month_tokens for pid, reading in current.items() if reading.month_tokens}
     costs = [reading.month_cost_usd for reading in current.values() if reading.month_cost_usd is not None]
-    if current:
-        cost, currency, _ledger = whale_month()
-        host_cost = money.to_usd(cost, currency) if cost is not None else None
-        if host_cost is not None:
-            costs.append(host_cost)
     return {
         "since": since,
         "days": datetime.datetime.fromtimestamp(now).day,

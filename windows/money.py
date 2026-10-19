@@ -9,10 +9,48 @@ its currency stay on the report, and only the rendering passes through this.
 
 from __future__ import annotations
 
+import datetime
+import math
+
 # CNY per 1 USD. Overridable from config ("currency": {"usd_cny": 7.14}).
 DEFAULT_USD_CNY = 7.14
 
 _rate = DEFAULT_USD_CNY
+
+# Verified 2026-10-19: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+_DEEPSEEK_CNY = {"deepseek-flash": (1.0, 0.02, 4.0),
+                 "deepseek-v4-flash": (1.0, 0.02, 4.0),
+                 "deepseek-v4-flash-vision-exp": (1.0, 0.02, 4.0),
+                 "deepseek-v4-pro": (4.5, 0.15, 13.5)}
+# https://www.beijing.gov.cn/cs/gncs/zcwj/202603/t20260327_4568275.html
+# State Council's 2026 holiday schedule; weekend make-up days remain off-peak.
+_HOLIDAYS_2026 = (("01-01", "01-03"), ("02-15", "02-23"), ("04-04", "04-06"),
+                  ("05-01", "05-05"), ("06-19", "06-21"), ("09-25", "09-27"),
+                  ("10-01", "10-07"))
+
+
+def deepseek_cost(name: str, parts: dict, requested_at: float) -> float | None:
+    """Current CNY list-price estimate for one official API request, not a bill."""
+    rates = _DEEPSEEK_CNY.get(name.lower())
+    if rates is None or any(not isinstance(parts.get(key), int) or parts[key] < 0
+                            for key in ("input", "output", "cache_read", "cache_write")):
+        return None
+    if not math.isfinite(requested_at):
+        return None
+    try:
+        moment = datetime.datetime.fromtimestamp(
+            requested_at, datetime.timezone(datetime.timedelta(hours=8)))
+    except (OverflowError, OSError, ValueError):
+        return None
+    # shortcut: holiday dates are verified for 2026 only; refresh before pricing another year.
+    if moment.year != 2026:
+        return None
+    day = moment.strftime("%m-%d")
+    holiday = any(start <= day <= end for start, end in _HOLIDAYS_2026)
+    peak = moment.weekday() < 5 and not holiday and (9 <= moment.hour < 12 or 14 <= moment.hour < 18)
+    fresh, cached, output = rates
+    return ((parts["input"] + parts["cache_write"]) * fresh
+            + parts["cache_read"] * cached + parts["output"] * output) * (2 if peak else 1) / 1_000_000
 
 
 def set_rate(usd_cny) -> float:

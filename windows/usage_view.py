@@ -112,7 +112,7 @@ class UsageWindow(QWidget):
         self.heatmap = UsageHeatmap(self)
         box.addWidget(self.heatmap)
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Agent", "模型", "Token", "缓存读占输入", "已记录费用（USD）"])
+        self.table.setHorizontalHeaderLabels(["Agent", "模型", "Token", "缓存读占输入", "记录/估算费用（USD）"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -222,7 +222,7 @@ class UsageWindow(QWidget):
         seconds, count = tokens.RANGES[key]
         minutes = seconds // count // 60
         price_note = ("按 Token 类型筛选时不分摊费用。" if kind else
-                      "已记录的美元计价覆盖 %.0f%% Token；— 表示未知，不等于免费。" % (priced * 100 / total if total else 0))
+                      "记录/估算费用覆盖 %.0f%% Token；— 表示未知，不等于免费。" % (priced * 100 / total if total else 0))
         self.note.setText(
             "左侧较早，右侧现在 · 每柱 %s · 仅统计仍保留的本地记录。\n%s\n"
             "输入/输出/缓存分项覆盖 %.0f%% Token；缺失分项不猜测。"
@@ -233,3 +233,5 @@ class UsageWindow(QWidget):
                    if (chosen is None or chosen == pid) and reading.notice]
         if notices:
             self.note.setText(self.note.text() + "\n" + "\n".join(notices[:3]))
+        if chosen in (None, "dsh"):
+            self.note.setText(self.note.text() + "\nDeepSeek 官方 API 按现行人民币单价、请求开始时间和北京时间峰谷规则估算，再换算为美元；不代表账单。")
