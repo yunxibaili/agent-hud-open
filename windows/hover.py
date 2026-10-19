@@ -200,6 +200,8 @@ class DockLevels:
             self.peek.reduce(Event.TIMER_FIRED, now, self.peek_delay, self.collapse_delay),
             self.panel.reduce(Event.TIMER_FIRED, now, self.hover_delay, self.collapse_delay),
         ]
+        if self.panel.state == State.COLLAPSED:
+            self.clicked_index = None
         pending = [d for d in deadlines if d is not None]
         return min(pending) if pending else None
 

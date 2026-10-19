@@ -3,6 +3,10 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个**贴边停靠、绝不悬空**的桌面悬浮 HUD，只盯 **Codex / OpenCode / Antigravity / WorkBuddy / DSH** 这 5 个工具的额度。
 
+### Windows v0.1.3 · 2026-10-19
+
+- 卡片自动关闭时清除点击焦点，避免下一次悬停仍显示旧 Agent，以及重新点击同一图标时只触发关闭。固定面板和关闭前的防抖行为不变。
+
 ### Windows v0.1.2 · 2026-10-19
 
 - 使用 [Qt QLockFile](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QLockFile.html) 防止同目录重复启动 HUD；重复启动的守护进程会退出，不反复拉起副本。
