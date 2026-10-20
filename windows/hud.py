@@ -64,7 +64,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.16"
+VERSION = "0.1.17"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -700,7 +700,8 @@ class HudWindow(QWidget):
                 break
             if data is not None:
                 self.month_data = data
-                self.dock.month_text = money.usd(data.get("cost_usd")) if data.get("cost_usd") is not None else ""
+                self.dock.month_text = (money.compact(data["cost_usd"], "USD", digits=0)
+                                        if data.get("cost_usd") is not None else "")
                 changed = True
         readings = tokens.cached()
         if readings is not self.readings:
@@ -775,7 +776,9 @@ class HudWindow(QWidget):
         self._frame_at = now
         active = any(self.history.is_active(pid) for pid in self.enabled)
         self.phase += elapsed / (1.2 if active else 3.6)
-        self.dock.advance(now, self.phase, now / 1.2)
+        if self.dock.advance(now, self.phase, now / 1.2):
+            self._apply_presentation()
+            self._apply_geometry()
         loading = any(slot.loading for pid, slot in self.dock.slots.items() if pid != MONTH_PID)
         interval = (FRAME_ACTIVE_MS if loading or self.dock.busy() or self.tuck_anim.running()
                     else FRAME_IDLE_MS)

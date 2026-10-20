@@ -151,7 +151,6 @@ class DockBar(QWidget):
         super().__init__(parent)
         self.marks = marks
         self.reports: list[model.ProviderReport] = []
-        self.expected = 5
         self.hover_index = -1
         self.warn = 70.0
         self.crit = 90.0
@@ -162,7 +161,7 @@ class DockBar(QWidget):
         self.style = "ring"                     # or "glow"
         self.phase = 0.0
         self.active: dict[str, bool] = {}
-        self.text_font = T.mono(10.5, QFont.DemiBold)
+        self.text_font = T.numeric(10.5, QFont.DemiBold)
         self.text_width = max(34, QFontMetrics(self.text_font).horizontalAdvance("100%"))
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
@@ -377,7 +376,7 @@ class DockBar(QWidget):
         rather than printing a dash that says nothing.
         """
         if report.raw_balance is not None:
-            return money.compact(report.raw_balance, report.balance_currency)
+            return money.compact(report.raw_balance, report.balance_currency, digits=0)
         window = report.headline_window()
         if window is not None:
             if window.unlimited:
@@ -386,7 +385,7 @@ class DockBar(QWidget):
                 return "%.0f%%" % (100.0 - window.used_percent)
         cost = getattr(report, "today_cost", None)
         if cost:
-            return money.usd(cost, getattr(report, "cost_currency", None) or "CNY", 0)
+            return money.compact(cost, getattr(report, "cost_currency", None) or "CNY", digits=0)
         balance = getattr(report, "balance", None)
         if balance:
             return balance
@@ -519,16 +518,18 @@ class DockBar(QWidget):
         self.tuck = max(0.0, min(1.0, fraction))
         self.update()
 
-    def advance(self, now: float, breath: float, spin: float) -> None:
+    def advance(self, now: float, breath: float, spin: float) -> bool:
         """Fold the ambient values in and fire any sweep that has come due."""
         self.breath = breath
         self.spin = spin
+        removed = False
         for report in list(self.reports):
             slot = self.slots.get(report.pid)
             if slot is not None and slot.leaving and slot.alpha <= 0.02:
                 self.reports = [r for r in self.reports if r.pid != report.pid]
                 self.slots.pop(report.pid, None)
                 self.order = [p for p in self.order if p != report.pid]
+                removed = True
         fired = False
         while self._sweeps and now >= self._sweeps[0][0]:
             _due, pid, share, ms = self._sweeps.pop(0)
@@ -539,6 +540,7 @@ class DockBar(QWidget):
             fired = True
         if fired:
             self.update()
+        return removed
 
     def idle_breath(self) -> float:
         """The 0..1 sine the ambient glow rides on."""
@@ -570,7 +572,7 @@ class DockBar(QWidget):
         return hot.adjusted(-SLOT_GAP, -PAD / 2, SLOT_GAP, PAD / 2)
 
     def natural_size(self) -> QSize:
-        count = max(len(self.reports), self.expected)
+        count = max(1, len(self.reports))
         run = 2 * PAD + count * self.slot_length() + max(0, count - 1) * SLOT_GAP
         thick = HEIGHT
         if self.horizontal:
@@ -877,16 +879,7 @@ class DockBar(QWidget):
             painter.setPen(color if report.ok else T.IDLE)
             label = self.slot_percent(report, slot)
             label = label if label is not None else self.remaining_text(report)
-            font = QFont(self.text_font)
-            available = max(1.0, text.width() - 2)
-            width = QFontMetrics(font).horizontalAdvance(label)
-            if width > available:
-                # Fit the number inside its slot; never resize the dock or clip its unit.
-                font.setPointSizeF(max(8.0, font.pointSizeF() * available / width))
-                width = QFontMetrics(font).horizontalAdvance(label)
-                if width > available:
-                    font.setStretch(max(1, int(100 * available / width)))
-            painter.setFont(font)
+            painter.setFont(self.text_font)
             painter.drawText(text, int(Qt.AlignLeft | Qt.AlignVCenter), label)
 
     @staticmethod

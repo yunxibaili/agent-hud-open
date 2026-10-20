@@ -104,8 +104,10 @@ def compact(amount, currency, digits: int = 1) -> str:
     value = to_usd(amount, currency)
     if value is None:
         return "--"
+    if digits == 0 and 0 < value < 1:
+        return "<$1"
     if abs(value) >= 1000:
-        return "$%.1fk" % (value / 1000.0)
+        return "$%.*fk" % (digits, value / 1000.0)
     if abs(value) >= 100:
         return "$%.0f" % value
     return "$%.*f" % (digits, value)
