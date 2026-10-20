@@ -64,7 +64,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.18"
+VERSION = "0.1.19"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -420,6 +420,28 @@ class HudWindow(QWidget):
                                  ok=bool(reading.events), note=None, details=[],
                                  quota_note=reading.notice)
             out.append(report)
+        now = time.time()
+
+        def has_credit(report):
+            if not report.ok or not 0 <= now - report.updated_at <= history_module.MAX_READING_AGE:
+                return False
+            if report.raw_balance is not None and math.isfinite(report.raw_balance) and report.raw_balance > 0:
+                return True
+            pools = {}
+            for window in report.windows:
+                if not window.all_models:
+                    continue
+                current = (window.reset_at is None or
+                           math.isfinite(window.reset_at) and window.reset_at > now)
+                used = window.used_percent
+                remaining = current and (window.unlimited or
+                            used is not None and math.isfinite(used) and 0 <= used < 100)
+                # One pool needs all its limits; separate regional accounts remain independent.
+                pool = window.key.split("|", 1)[0]
+                pools[pool] = pools.get(pool, True) and remaining
+            return any(pools.values())
+
+        out.sort(key=lambda report: (report.pid != "codex", not has_credit(report)))
         return out
 
     def _dock_reports(self) -> list[model.ProviderReport]:
