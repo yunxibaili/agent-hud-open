@@ -64,7 +64,7 @@ from PySide6.QtGui import (QActionGroup, QColor, QIcon, QPainter, QRegion,  # no
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect,  # noqa: E402
                                QMenu, QSystemTrayIcon, QWidget)
 
-VERSION = "0.1.17"
+VERSION = "0.1.18"
 SHADOW = 30
 GAP = 6
 PANEL_WIDTH = 472
@@ -404,10 +404,8 @@ class HudWindow(QWidget):
     # -- hover / levels -----------------------------------------------------
     def _bar_reports(self) -> list[model.ProviderReport]:
         out = []
-        # WorkBuddy remains a quota entry while DSH is running through it.
-        show_workbuddy = "dsh" in self.running_agents
-        for pid in self.enabled:
-            if pid not in self.running_agents and not (pid == "workbuddy" and show_workbuddy):
+        for pid in ("opencode", "workbuddy", "dsh", "codex"):
+            if pid not in self.enabled:
                 continue
             report = self.reports.get(pid)
             if report is None:
