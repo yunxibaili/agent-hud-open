@@ -11,6 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import model
 from model import Detail, ProviderReport, QuotaWindow
@@ -24,6 +25,7 @@ MARK = "OC"
 UA = "opencode/1.0.0"
 
 SERVICES = {
+    "zen": ("OpenCode Zen", None),
     "go": ("OpenCode Go", "https://opencode.ai/zen/go/v1/usage"),
     "glm_cn": ("GLM", "https://open.bigmodel.cn/api/monitor/usage/quota/limit"),
     "glm_global": ("GLM", "https://api.z.ai/api/monitor/usage/quota/limit"),
@@ -81,8 +83,13 @@ def service_for(provider: str, base_url: str | None, overrides: dict | None = No
         base_url = (overrides or {}).get(provider)
     if base_url:
         low = base_url.lower()
-        if "opencode.ai" in low and "zen/go" in low:
-            return "go"
+        try:
+            url = urlsplit(low)
+            if url.hostname == "opencode.ai":
+                path = url.path.rstrip("/")
+                return "go" if path == "/zen/go" or path.startswith("/zen/go/") else "zen"
+        except ValueError:
+            return None
         if "api.z.ai" in low and ("/api/coding/paas/v4" in low or "/api/anthropic" in low):
             return "glm_global"
         if "open.bigmodel.cn" in low and ("/api/coding/paas/v4" in low or "/api/anthropic" in low):
@@ -94,7 +101,8 @@ def service_for(provider: str, base_url: str | None, overrides: dict | None = No
         return None
     return {
         "opencode-go": "go",
-        "opencode": "go",
+        "opencode": "zen",
+        "opencode-zen": "zen",
         "zai": "glm_global",
         "zai-coding-plan": "glm_global",
         "zhipuai-coding-plan": "glm_cn",
@@ -142,7 +150,7 @@ def discover(cfg: dict) -> tuple[list[dict], list[tuple[str, str]]]:
             notes.append(("配置", str(root / name)))
 
     env = os.environ
-    for var, service in (("OPENCODE_GO_API_KEY", "go"), ("OPENCODE_API_KEY", "go"),
+    for var, service in (("OPENCODE_GO_API_KEY", "go"), ("OPENCODE_API_KEY", "zen"),
                          ("ZAI_API_KEY", "glm_global"), ("Z_AI_API_KEY", "glm_global"),
                          ("ZAI_CODING_CN_API_KEY", "glm_cn"), ("BIGMODEL_API_KEY", "glm_cn"),
                          ("ZHIPU_API_KEY", "glm_cn"), ("GLM_API_KEY", "glm_cn"),
@@ -152,7 +160,7 @@ def discover(cfg: dict) -> tuple[list[dict], list[tuple[str, str]]]:
 
     for home in (userprofile() / ".dsh", appdata() / "ai.deepseek.harness.desktop" / "dsh"):
         refs = read_dsh_refs_merged(home)
-        for var, service in (("OPENCODE_GO_API_KEY", "go"), ("OPENCODE_API_KEY", "go"),
+        for var, service in (("OPENCODE_GO_API_KEY", "go"), ("OPENCODE_API_KEY", "zen"),
                              ("ZAI_API_KEY", "glm_global"), ("KIMI_API_KEY", "kimi_cn")):
             if refs.get(var):
                 add(service, refs[var], "dsh:" + str(home / ".credentials.yaml"), priority=3)
@@ -232,6 +240,8 @@ def _headers(service: str, token: str) -> dict:
 
 def _endpoint(service: str) -> str:
     url = SERVICES[service][1]
+    if url is None:
+        raise ValueError("OpenCode Zen 余额接口尚未接入")
     if service.startswith("glm") and os.environ.get("Z_AI_USAGE_SCOPE") == "team":
         return url + "?type=2"
     return url
@@ -369,8 +379,12 @@ def fetch(cfg: dict) -> ProviderReport:
 
     failures = []
     accounts = []
+    zen = False
     for credential in credentials:
         pool = SERVICES[credential["service"]][0]
+        if credential["service"] == "zen":
+            zen = True
+            continue
         try:
             plan, windows = fetch_pool(credential)
         except Exception as exc:
@@ -389,10 +403,12 @@ def fetch(cfg: dict) -> ProviderReport:
             report.plan = plan
 
     report.account = " / ".join(dict.fromkeys(accounts)) or None
-    report.ok = bool(report.windows)
+    report.ok = bool(report.windows) or (zen and all(c["service"] == "zen" for c in credentials))
     if not report.ok:
         report.note = "；".join(failures[:2]) or "未读取到额度"
     elif failures:
         report.details.append(Detail("部分失败", "；".join(failures[:2])))
+    if zen:
+        report.note = (report.note + " · " if report.note else "") + "Zen 按量用量见统计；账户余额未读取"
     report.updated_at = time.time()
     return report

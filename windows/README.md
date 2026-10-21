@@ -5,6 +5,14 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个贴边停靠的桌面悬浮 HUD。目前注册 16 种工具；额度、余额和本地会话用量的支持因客户端而异，具体见版本与移植状态说明。
 
+### Windows v0.1.20 · 2026-10-22
+
+- 区分 OpenCode Zen 按量服务和 Go 订阅：`opencode` / `opencode-zen`、`OPENCODE_API_KEY` 不再误查 Go 额度；Zen 本地用量继续使用现有 OpenCode 入口。未核验到公开余额接口，明确标注“账户余额未读取”，不以 Go 的余量代替 Zen 余额。
+- Hermes 兼容新版 Windows 原生目录 `%LOCALAPPDATA%/hermes`、命名 profile 及 `HERMES_DATA_DIR_SUFFIX`；保留 `HERMES_HOME` 覆盖与旧 `.hermes` 目录回退，复用原有只读 SQLite/WAL 缓存，计入综合统计、模型统计和月度总量。
+- 统计表增加“计费来源”，从本地 OpenCode、DSH、Hermes 记录识别 Zen 等已知服务；只显示公开服务名称，不显示账户或原始端点。Hermes 使用 Zen 的请求仍归 Hermes，DSH 请求仍归 DSH，避免按执行客户端与计费来源重复相加。顶部四个图标及 Codex 优先规则保持现状，不新增 Zen 或 Hermes 图标。
+- Hermes 复用本地已记录的实际/估算费用；未知零值不视为免费。会话/模型累计数据按首次记录时间归档，跨日记录尚不能按请求精确拆分，界面会提示这一边界。
+- 依据：[OpenCode 模型服务](https://opencode.ai/v2/docs/console/models/)、[OpenCode 计费说明](https://opencode.ai/v2/docs/console/billing/)、[Hermes 原生目录实现](https://github.com/NousResearch/hermes-agent/blob/main/hermes_constants.py)及本机同版本源码、数据库字段核对；不读取聊天正文，不增加推理或余额试探请求。
+
 ### Windows v0.1.19 · 2026-10-20
 
 - Codex 始终排第一，不受剩余额度影响；其余三个优先显示有已确认剩余积分、额度或正余额的提供方。同一优先级保持 OpenCode、WorkBuddy、DSH 的顺序，「月」仍在末尾。

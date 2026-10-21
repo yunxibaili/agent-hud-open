@@ -404,7 +404,9 @@ class AgentCard(QWidget):
         dot.setFont(T.ui(8.0))
         dot.setStyleSheet("color: %s;" % T.color_for(level).name())
         header.addWidget(dot)
-        header.addWidget(ElidedLabel("已连接" if report.ok else "读取失败", T.TEXT_DIM, 9.0), 0)
+        status = ("本地用量" if report.ok and report.pid == "opencode" and not report.windows
+                  else "已连接" if report.ok else "读取失败")
+        header.addWidget(ElidedLabel(status, T.TEXT_DIM, 9.0), 0)
         outer.addLayout(header)
 
         if report.windows:

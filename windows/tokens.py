@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import providers.codex as codex_provider
+import providers.opencode as opencode_provider
 import money
 from winx import appdata, localappdata, userprofile
 
@@ -139,6 +140,11 @@ def _bucketize(events, now: float, currency: str | None = None,
                     "activity": [[0] * 24 for _ in range(7)],
                     "part_activity": {kind: [[0] * 24 for _ in range(7)] for kind in TOKEN_KINDS}}
             grouped = entry["models"][name]
+            metadata = event[6] if len(event) > 6 and isinstance(event[6], dict) else {}
+            bill_source = metadata.get("billing_source", "其他/未记录")
+            sources = grouped.setdefault("billing_sources", [])
+            if bill_source not in sources:
+                sources.append(bill_source)
             grouped["tokens"] += int(tokens)
             grouped["buckets"][index] += int(tokens)
             grouped["activity"][moment.weekday()][moment.hour] += int(tokens)
@@ -310,6 +316,17 @@ def _opencode_message_tokens(data: dict) -> tuple[int, float | None]:
     return total, float(cost) if isinstance(cost, (int, float)) else None
 
 
+def billing_source(provider, base_url=None):
+    """Only public service labels leave a reader, never account or endpoint details."""
+    provider = provider if isinstance(provider, str) else ""
+    if provider.startswith(WORKBUDDY_ROUTES):
+        return "WorkBuddy"
+    if provider == "deepseek-official":
+        return "DeepSeek API"
+    service = opencode_provider.service_for(provider, base_url)
+    return opencode_provider.SERVICES[service][0] if service else "其他/未记录"
+
+
 def _opencode_event(stamp, data):
     total, cost = _opencode_message_tokens(data)
     usage = data.get("tokens") or {}
@@ -321,7 +338,8 @@ def _opencode_event(stamp, data):
              "cache_read": number(cache.get("read")), "cache_write": number(cache.get("write"))}
     named = data.get("model")
     name = data.get("modelID") or (named.get("id") if isinstance(named, dict) else named) or "Unknown"
-    return (stamp, total, cost, name, parts)
+    provider = data.get("providerID") or (named.get("providerID") if isinstance(named, dict) else None)
+    return (stamp, total, cost, name, parts, None, {"billing_source": billing_source(provider)})
 
 
 def _opencode(now: float) -> TokenReading:
@@ -522,15 +540,17 @@ def harness_by_route(now: float | None = None) -> dict[str, list]:
     if _harness_cache.get("key") == stamp_key and _harness_cache.get("split"):
         return _harness_cache["split"]
     all_events, source = _harness_events()
-    split: dict[str, list] = {"workbuddy": [], "opencode": [], "dsh": []}
+    split: dict[str, list] = {"workbuddy": [], "opencode": [], "zen": [], "dsh": []}
     for event in all_events:
         provider = event[5]
         if provider.startswith(WORKBUDDY_ROUTES):
-            split["workbuddy"].append(event[:5])
+            split["workbuddy"].append(event)
         elif provider.startswith(OPENCODE_ROUTES):
-            split["opencode"].append(event[:5])
+            split["opencode"].append(event)
+        elif opencode_provider.service_for(provider, None) == "zen":
+            split["zen"].append(event)
         else:
-            split["dsh"].append(event[:5])
+            split["dsh"].append(event)
     _harness_cache["key"] = stamp_key
     _harness_cache["split"] = split
     return split
@@ -608,11 +628,12 @@ def _transcript_usage(record: dict):
 
 def _dsh(now: float) -> TokenReading:
     split = harness_by_route(now)
-    events = [(ts, count, money.to_usd(cost, "CNY"), name, parts)
-              for route in split.values() for ts, count, cost, name, parts in route]
+    events = [(ts, count, money.to_usd(cost, "CNY"), name, parts, None,
+               {"billing_source": billing_source(provider)})
+              for route in split.values() for ts, count, cost, name, parts, provider in route]
     reading = _bucketize(events, now, "USD", "Harness sessions", "dsh")
     reading.quota_sources = tuple(name for route, name in (
-        ("workbuddy", "WorkBuddy"), ("opencode", "OpenCode Go"))
+        ("workbuddy", "WorkBuddy"), ("opencode", "OpenCode Go"), ("zen", "OpenCode Zen"))
         if any(now - WINDOW_SECONDS <= event[0] <= now for event in split[route]))
     if reading.quota_sources:
         # A route name proves the service, not which of its accounts paid.

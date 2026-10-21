@@ -1,8 +1,8 @@
 """Windows adapters for upstream's local transcript layouts (Apache-2.0).
 
 Reference: OpenAgentSessions, QwenSessions, TencentBuddySessions and
-OpenClawSessions at jazzenchen/agent-hud-open bf19ac9. Only counters and model
-names leave the readers; no prompts, identities or credentials are retained.
+OpenClawSessions at jazzenchen/agent-hud-open bf19ac9. Only counters, model names
+and public service labels leave readers; no prompts or credentials are retained.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from contextlib import closing
 from pathlib import Path
 
 import tokens
-from winx import userprofile
+from winx import IS_WINDOWS, localappdata, userprofile
 
 LOCAL_PROVIDERS = {"claude", "codebuddy", "pi", "kimi", "qwen", "openclaw", "hermes", "zcode", "copilot", "grok"}
 USAGE_PROVIDERS = LOCAL_PROVIDERS | {"devin"}
@@ -52,7 +52,12 @@ def layouts(pid):
         roots += [p for p in home.glob(".openclaw-*") if p.is_dir()]
         return [(root / "agents", "*/sessions/*.jsonl*") for root in roots]
     if pid == "hermes":
-        root = _home("HERMES_HOME", ".hermes")
+        suffix = os.environ.get("HERMES_DATA_DIR_SUFFIX", "")
+        root = _home("HERMES_HOME", ".hermes" + suffix)
+        if IS_WINDOWS and not os.environ.get("HERMES_HOME"):
+            native = localappdata() / ("hermes" + suffix)
+            if (native / "state.db").is_file() or any((native / "profiles").glob("*/state.db")):
+                root = native
         return [(root, "state.db"), (root / "profiles", "*/state.db")]
     if pid == "zcode":
         return [(home / ".zcode" / "cli" / "db", "db.sqlite")]
@@ -246,6 +251,10 @@ def _hermes(path):
             fallback = column("s", session, name, "0")
             fields.append("CASE WHEN u.session_id IS NULL THEN %s ELSE %s END" %
                           (fallback, column("u", usage, name, "0")) if joined else fallback)
+        for name in ("billing_provider", "billing_base_url", "actual_cost_usd", "estimated_cost_usd"):
+            fallback = column("s", session, name)
+            fields.append("CASE WHEN u.session_id IS NULL THEN %s ELSE %s END" %
+                          (fallback, column("u", usage, name)) if joined else fallback)
         activity = "MAX(s.started_at, COALESCE(%s, 0), COALESCE(%s, 0))" % (
             column("s", session, "ended_at"), column("s", session, "last_activity_at"))
         if joined and "last_seen" in usage:
@@ -256,9 +265,11 @@ def _hermes(path):
             if index == 100000:
                 raise ValueError("Hermes row limit reached")
             parts = dict(zip(("input", "output", "cache_read", "cache_write"), map(counter, row[3:7])))
-            item = _event(row[2], parts, row[1], "%s:%s:%d" % (path, row[0], index))
+            cost = next((value for value in row[9:11]
+                         if isinstance(value, (int, float)) and math.isfinite(value) and value > 0), None)
+            item = _event(row[2], parts, row[1], "%s:%s:%d" % (path, row[0], index), cost)
             if item:
-                events.append(item)
+                events.append(item + ({"billing_source": tokens.billing_source(row[7], row[8])},))
     return events
 
 
@@ -457,4 +468,6 @@ def collect(pid, now):
         reading.notice = (reading.notice + " · " if reading.notice else "") + "仅关闭快照，尚未读取运行中 OTel 用量"
     if pid == "grok" and files:
         reading.notice = (reading.notice + " · " if reading.notice else "") + "推理日志优先；不以旧上下文大小估算用量"
+    if pid == "hermes" and files:
+        reading.notice = (reading.notice + " · " if reading.notice else "") + "会话/模型累计按首次记录时间归档，跨日用量不能精确拆分"
     return reading

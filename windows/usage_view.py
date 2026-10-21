@@ -111,8 +111,8 @@ class UsageWindow(QWidget):
         box.addWidget(self.chart)
         self.heatmap = UsageHeatmap(self)
         box.addWidget(self.heatmap)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Agent", "模型", "Token", "缓存读占输入", "记录/估算费用（USD）"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Agent", "模型", "计费来源", "Token", "缓存读占输入", "记录/估算费用（USD）"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -183,7 +183,7 @@ class UsageWindow(QWidget):
             reading = readings.get(pid)
             entry = getattr(reading, "ranges", {}).get(key)
             if not entry:
-                rows.append((name, "—", "暂无记录", "—", "—"))
+                rows.append((name, "—", "—", "暂无记录", "—", "—"))
                 continue
             values = [0] * tokens.RANGES[key][1]
             for model_name, data in entry["models"].items():
@@ -204,6 +204,7 @@ class UsageWindow(QWidget):
                 hit = ("%.0f%%" % (data["parts"]["cache_read"] * 100 / incoming)
                        if incoming and data["known_tokens"] == data["tokens"] else "—")
                 rows.append((name, "未记录模型" if model_name == "Unknown" else model_name,
+                             " / ".join(data.get("billing_sources", ["其他/未记录"])),
                              model.human_tokens(count), hit, "≈$%.2f" % cost if cost is not None else "—"))
             layers.append((values, T.agent_color(pid)))
         self.chart.layers = layers
@@ -216,7 +217,7 @@ class UsageWindow(QWidget):
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
-                if col >= 2:
+                if col >= 3:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(row, col, item)
         seconds, count = tokens.RANGES[key]
