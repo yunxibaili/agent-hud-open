@@ -3,7 +3,8 @@
 Every client keeps its own dated record of what it spent:
 
 * Codex   - the token_count events in its rollout logs,
-* OpenCode- the assistant rows of opencode.db (or storage/message/*.json),
+* OpenCode- the assistant rows of opencode.db (v2 session_message plus
+  V1-only message rows, or storage/message/*.json),
 * WorkBuddy - the WorkBuddy client's own logs,
 * DSH     - all Harness turns, including those billed through another service.
 
@@ -355,18 +356,51 @@ def _opencode(now: float) -> TokenReading:
                                         uri=True, timeout=20)
                     c.execute("PRAGMA query_only=1")
                     try:
-                        return c.execute(
-                            "SELECT time_created, data FROM message "
-                            "WHERE time_created > ?", (cutoff_ms,)).fetchall()
+                        # One read transaction keeps both schemas on the same snapshot.
+                        c.execute("BEGIN")
+                        tables = {row[0] for row in c.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'")}
+                        if "session_message" not in tables:
+                            return [(created, blob, None) for created, blob in c.execute(
+                                "SELECT time_created, data FROM message "
+                                "WHERE time_created > ?", (cutoff_ms,))]
+                        # V2 is canonical for every session it contains. The fork
+                        # filter mirrors the official session stats query.
+                        session_columns = ({row[1] for row in c.execute("PRAGMA table_info(session_v2)")}
+                                           if "session_v2" in tables else set())
+                        if {"id", "fork_session_id", "time_created"} <= session_columns:
+                            v2 = c.execute(
+                                "SELECT m.time_created, m.data FROM session_message AS m "
+                                "JOIN session_v2 AS s ON s.id = m.session_id "
+                                "WHERE m.type = 'assistant' AND m.time_created > ? "
+                                "AND (s.fork_session_id IS NULL "
+                                "OR m.time_created >= s.time_created)",
+                                (cutoff_ms,)).fetchall()
+                        else:
+                            v2 = c.execute(
+                                "SELECT time_created, data FROM session_message "
+                                "WHERE type = 'assistant' AND time_created > ?",
+                                (cutoff_ms,)).fetchall()
+                        rows = [(created, blob, "assistant") for created, blob in v2]
+                        if "message" in tables:
+                            # Sessions that never migrated exist only in V1's table.
+                            legacy = c.execute(
+                                "SELECT m.time_created, m.data FROM message AS m "
+                                "WHERE m.time_created > ? AND NOT EXISTS ("
+                                "SELECT 1 FROM session_message AS sm "
+                                "WHERE sm.session_id = m.session_id)",
+                                (cutoff_ms,)).fetchall()
+                            rows += [(created, blob, None) for created, blob in legacy]
+                        return rows
                     finally:
                         c.close()
                 rows = cached_rows(str(db), _parse_db, cache_tag=cutoff_ms)
-                for created, blob in rows:
+                for created, blob, kind in rows:
                     try:
                         data = json.loads(blob)
                     except Exception:
                         continue
-                    if data.get("role") != "assistant":
+                    if kind != "assistant" and data.get("role") != "assistant":
                         continue
                     tokens, cost = _opencode_message_tokens(data)
                     if tokens:

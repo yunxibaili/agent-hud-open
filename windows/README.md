@@ -5,6 +5,12 @@
 把 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 的**额度采集**与**停靠 / 悬停状态机**搬到 Windows：
 一个贴边停靠的桌面悬浮 HUD。目前注册 16 种工具；额度、余额和本地会话用量的支持因客户端而异，具体见版本与移植状态说明。
 
+### Windows v0.1.21 · 2026-10-27
+
+- 修复 OpenCode v2 本地用量漏读：在同一只读数据库快照中读取 `session_message`（助手类型、`time_created`、`data`，模型在 `data.model.id` / `data.model.providerID`，Token 在 `data.tokens`），同时保留仅存在于旧 `message` 表的会话；按官方迁移规则以 `session_id` 去重，已迁移会话不再从旧表重复计数。
+- 按 `session_v2.fork_session_id` 与 `session_v2.time_created` 跳过 fork 继承的早期消息；数据库只有旧表时继续按原逻辑读取，兼容嵌套模型与旧 `role` 字段。保留 32 天窗口、只读连接与 WAL 缓存、现有统计/计费来源，以及缺失或读取失败时的降级处理。
+- 依据：[OpenCode session stats](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/session/stats.ts)、[V2 数据库迁移](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/database/migration/20260804233008_loose_psylocke.ts)；不读取凭据，不发送推理或额度请求。
+
 ### Windows v0.1.20 · 2026-10-22
 
 - 区分 OpenCode Zen 按量服务和 Go 订阅：`opencode` / `opencode-zen`、`OPENCODE_API_KEY` 不再误查 Go 额度；Zen 本地用量继续使用现有 OpenCode 入口。未核验到公开余额接口，明确标注“账户余额未读取”，不以 Go 的余量代替 Zen 余额。
